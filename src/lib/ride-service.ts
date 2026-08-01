@@ -97,7 +97,7 @@ async function linkedWalletWif(
 }
 
 async function refreshChainWallets(
-  wallets: Array<{ role: "passenger" | "driver" uid: string address: string }>,
+  wallets: Array<{ role: "passenger" | "driver"; uid: string; address: string }>,
 ) {
   const { refreshPasadaWalletBalance } = await import("./auth")
   await Promise.allSettled(

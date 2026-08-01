@@ -1,14 +1,9 @@
 import type { ReactNode } from 'react'
 
-export function PhoneFrame({ children, chrome }: { children: ReactNode; chrome?: string }) {
+export function PhoneFrame({ children }: { children: ReactNode; chrome?: string }) {
   return (
     <div className="relative mx-auto w-full max-w-[400px]">
       <div className="relative h-[812px] overflow-hidden rounded-[38px] bg-white shadow-[0_40px_90px_-30px_rgba(11,11,12,0.55)] ring-1 ring-ink/10">
-        <div className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-7 pt-3 pb-1 text-[11px] font-semibold text-white mix-blend-difference">
-          <span className="num">9:41</span>
-          <span className="num tracking-[0.1em]">{chrome ?? 'PASADA'}</span>
-          <span className="num">100%</span>
-        </div>
         {children}
       </div>
     </div>

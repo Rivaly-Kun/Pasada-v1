@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import MapCanvas from "../../components/MapCanvas"
+import QRCode from "../../components/QRCode"
 import { BottomNav, Icons, PhoneFrame } from "../../components/PhoneFrame"
 import { Button, Pill, Row, SectionLabel } from "../../components/ui"
 import WalletSigningKeyCard from "../../components/WalletSigningKeyCard"
@@ -923,6 +924,21 @@ function DriverPay({
           </span>
         </div>
       </div>
+
+      {/* Scannable Driver QR Code */}
+      {account.bchAddress && (
+        <div className="mt-3 flex flex-col items-center rounded-2xl border border-ink-100 bg-white p-5 text-center shadow-xs">
+          <p className="font-mono text-[10px] tracking-[0.14em] text-ink-400 uppercase">
+            Driver Payout QR Code
+          </p>
+          <div className="mt-3.5 flex flex-col items-center">
+            <QRCode value={account.bchAddress} size={190} />
+            <p className="num mt-3 text-[11px] break-all font-medium text-ink-700">
+              {account.bchAddress}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="mt-3 rounded-xl bg-white px-4">
         <Row

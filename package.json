@@ -14,9 +14,11 @@
   "dependencies": {
     "@bitauth/libauth": "^3.0.0",
     "@electrum-cash/network": "^4.2.2",
+    "@types/qrcode": "^1.5.6",
     "cashscript": "0.13.0",
     "electrum-cash": "^3.2.0",
     "firebase": "^12.17.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

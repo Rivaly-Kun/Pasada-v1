@@ -9,6 +9,7 @@ import FareBreakdownList, {
   BuyoutNotice,
 } from "../../components/FareBreakdownList"
 import MapCanvas from "../../components/MapCanvas"
+import QRCode from "../../components/QRCode"
 import { BottomNav, Icons, PhoneFrame } from "../../components/PhoneFrame"
 import { Button, Pill, Row, SectionLabel, Toggle } from "../../components/ui"
 import {
@@ -670,7 +671,7 @@ function BookingScreen(p: BookingProps) {
   // While picking, the sheet collapses to a bar so the map is fully tappable.
   const [picking, setPicking] = useState(false)
   const [sheetHeight, setSheetHeight] = useState(78)
-  const drag = useRef<{ startY: number startHeight: number } | null>(null)
+  const drag = useRef<{ startY: number; startHeight: number } | null>(null)
 
   const startDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -1340,6 +1341,37 @@ function PayScreen({
           {address}
         </p>
       </div>
+      {/* Scannable Paytaca-styled BCH QR Code Card */}
+      {address && (
+        <div className="mt-4 flex flex-col items-center rounded-3xl border border-ink-100 bg-white p-5 text-center shadow-md">
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1.5 rounded-full bg-[#0AC18E]/10 px-3 py-1 font-mono text-[11px] font-bold text-[#0AC18E]">
+              <span className="grid h-4 w-4 place-items-center rounded-full bg-[#0AC18E] text-[10px] text-white">₿</span>
+              BCH
+            </span>
+            <span className="rounded-full bg-ink-100 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-ink-500 uppercase">
+              CHIPNET
+            </span>
+          </div>
+
+          <div className="mt-4">
+            <QRCode value={address} size={210} />
+          </div>
+
+          <p className="num mt-4 max-w-[260px] text-[12px] font-mono leading-relaxed break-all font-medium text-ink-700">
+            {address}
+          </p>
+
+          <button
+            type="button"
+            onClick={() => void copyAddress()}
+            className="mt-3.5 flex items-center justify-center gap-2 rounded-full border border-ink-200 bg-ink-50 px-5 py-2 font-display text-[12px] font-bold text-ink-700 transition-colors hover:bg-ink-100 active:scale-98"
+          >
+            {copied ? "Address copied!" : "Click to copy address"}
+          </button>
+        </div>
+      )}
+
       <div className="mt-3 grid grid-cols-2 gap-2">
         <button
           type="button"
