@@ -48,7 +48,7 @@ export const PASSENGER_WALLET: WalletEntry[] = [
   },
   {
     id: 'w-2',
-    label: 'Top up from Paytaca',
+    label: 'Chipnet wallet top-up',
     detail: 'On-chain deposit · 2 confirmations',
     amount: 1_500 * PESO,
     txid: '3c7bd18f04e6295a7fd0c31b8e942a67501fd3ac9e28b74601cf5d2a83be09f4',
@@ -83,7 +83,7 @@ export const DRIVER_WALLET: WalletEntry[] = [
   },
   {
     id: 'e-3',
-    label: 'Withdrawal to Paytaca',
+    label: 'BCH wallet withdrawal',
     detail: 'Off-platform transfer',
     amount: -2_400 * PESO,
     at: 'Jul 31 · 9:15 PM',

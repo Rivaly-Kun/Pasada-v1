@@ -81,15 +81,6 @@ async function linkedWalletWif(
   const normalizedAddress = address.trim().toLowerCase()
   const localWif = localStorage.getItem(`pasada_wif_${normalizedAddress}`)
   if (!localWif) {
-    const wallet = (
-      await get(ref(db, `roleWallets/${role}/${uid}`))
-    ).val() as { mode?: string; source?: string } | null
-    const walletMode = wallet?.mode ?? wallet?.source
-    if (walletMode === "paytaca_walletconnect") {
-      throw new Error(
-        `This ${role} uses Paytaca through WalletConnect. BCH escrow requires an approved Paytaca transaction signature; PASADA never accepts its recovery phrase, WIF, or private key.`,
-      )
-    }
     throw new Error(
       `Open the ${role} wallet in the browser where its in-app BCH wallet was created. Private keys are never read from Firebase.`,
     )

@@ -2,7 +2,7 @@ import type { FareBreakdown, FareConfig, FareInput, FareLine } from './types'
 
 /** All money in this module is integer centavos — never floats. */
 export const PESO = 100
-// Matches the PHP estimate currently shown by Paytaca for Chipnet BCH.
+// Fallback PHP estimate if the live market quote is unavailable.
 export const DEFAULT_PHP_PER_BCH_CENTAVOS = 12_749 * PESO
 
 export const DEFAULT_FARE_CONFIG: FareConfig = {

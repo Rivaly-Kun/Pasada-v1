@@ -785,6 +785,19 @@ export default function DriverApp({
                 <span>Realtime ride record</span>
                 <span className="num truncate">{liveRide?.id.slice(-12)}</span>
               </p>
+              {(liveRide?.onChainTxid ?? liveRide?.escrow?.settlementTxid) && (
+                <a
+                  href={`https://chipnet.chaingraph.cash/tx/${liveRide?.onChainTxid ?? liveRide?.escrow?.settlementTxid}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 flex justify-between gap-3 text-[11px] text-pasada-blue hover:underline"
+                >
+                  <span>View settlement on Chipnet explorer</span>
+                  <span className="num truncate">
+                    {(liveRide?.onChainTxid ?? liveRide?.escrow?.settlementTxid)?.slice(-12)}
+                  </span>
+                </a>
+              )}
               <div className="mt-4">
                 <Button full onClick={reset}>
                   Back to map

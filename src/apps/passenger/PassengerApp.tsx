@@ -1059,6 +1059,7 @@ function RideScreen({
     ride?.paymentStatus === "funded" || ride?.paymentStatus === "settled"
   const progress = ride?.progress ?? 0
   const driverName = driver?.name ?? "Your driver"
+  const settlementTxid = ride?.onChainTxid ?? ride?.escrow?.settlementTxid
   const fundingError =
     serviceError || ride?.fundingError || ride?.escrow?.error || ""
 
@@ -1241,14 +1242,19 @@ function RideScreen({
               />
               <Row label="Refund" value={formatPeso(0)} tone="muted" />
             </div>
-            <p className="mt-3 flex items-center justify-between gap-3 text-[11px] text-ink-500">
-              <span>Settlement transaction</span>
-              <span className="num truncate">
-                {ride?.onChainTxid?.slice(-12) ??
-                  ride?.escrow?.settlementTxid?.slice(-12) ??
-                  "Settled on-chain"}
-              </span>
-            </p>
+            {settlementTxid ? (
+              <a
+                href={`https://chipnet.chaingraph.cash/tx/${settlementTxid}`}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-3 flex items-center justify-between gap-3 rounded-lg text-[11px] text-pasada-blue hover:underline"
+              >
+                <span>View settlement on Chipnet explorer</span>
+                <span className="num truncate">{settlementTxid.slice(-12)}</span>
+              </a>
+            ) : (
+              <p className="mt-3 text-[11px] text-ink-500">Settled on-chain</p>
+            )}
 
             <RateDriverSection
               rideId={ride?.id ?? ""}
@@ -1359,7 +1365,7 @@ function PayScreen({
           {address}
         </p>
       </div>
-      {/* Scannable Paytaca-styled BCH QR Code Card */}
+      {/* Scannable BCH QR Code Card */}
       {address && (
         <div className="mt-4 flex flex-col items-center rounded-3xl border border-ink-100 bg-white p-5 text-center shadow-md">
           <div className="flex items-center gap-2">
@@ -1494,11 +1500,7 @@ function SettingsScreen({ account }: { account: PasadaAccount | null }) {
         </p>
         <p className="mt-2 text-[11px] text-ink-300">
           This public address is used to display your balance and receive BCH. {" "}
-          {account?.walletMode === "paytaca_walletconnect"
-            ? "Paytaca keys remain inside Paytaca."
-            : account?.walletMode === "local_wallet"
-              ? "The in-app wallet key remains in this browser only."
-              : "Address-only mode verifies ownership without collecting a private key."}
+          The in-app wallet key remains in this browser only.
         </p>
       </div>
 

@@ -113,20 +113,11 @@ PASADA features a browser-native Bitcoin Cash transaction engine built on **Chip
 
 ---
 
-## 🔐 BCH wallet connection modes
+## 🔐 BCH wallet
 
-Account signup records one `walletMode` value in the user profile and role wallet:
+Signup automatically creates a new P2PKH Chipnet wallet in the browser. Its key remains browser-local; Firebase receives only the address and public key.
 
-- `paytaca_walletconnect` — creates a WalletConnect v2 `bch:bchtest` session with Paytaca, requests its native BCH signing capabilities, and verifies the selected address through a user-approved `bch_signMessage` request.
-- `local_wallet` — generates a new P2PKH Chipnet wallet in the browser. Its key remains browser-local; Firebase receives only the address and public key.
-
-Paytaca connectivity requires a WalletConnect/Reown project ID. Add the public client identifier to `.env`:
-
-```text
-VITE_WALLETCONNECT_PROJECT_ID=your_project_id
-```
-
-PASADA does not implement Paytaca as an OAuth provider and never requests, receives, transmits, logs, or stores Paytaca recovery phrases, WIFs, or private keys.
+PASADA creates browser-local BCH wallets and never requests, receives, transmits, logs, or stores a recovery phrase, WIF, or private key outside that browser.
 
 ## 🧪 Testing BCH Faucet & Funding
 

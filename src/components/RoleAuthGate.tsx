@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { PhoneFrame } from "./PhoneFrame"
-import QRCode from "./QRCode"
 import { Button } from "./ui"
 import {
   friendlyAuthError,
@@ -12,19 +11,11 @@ import {
   registerPasada,
 } from "../lib/auth"
 import {
-  createBchOwnershipChallenge,
   generateBchWallet,
   publicKeyForLocalBchWallet,
-  type GeneratedBchWallet,
-  verifyBchAddressOwnershipSignature,
 } from "../lib/bch-wallet"
-import {
-  connectPaytacaWallet,
-  requestPaytacaMessageSignature,
-  type PaytacaWalletConnection,
-} from "../lib/paytaca-walletconnect"
 import type { AppRole } from "../lib/firebase"
-import type { PasadaAccount, WalletMode } from "../lib/types"
+import type { PasadaAccount } from "../lib/types"
 
 export default function RoleAuthGate({
   role,
@@ -127,56 +118,16 @@ function RoleLoginPanel({
   const [password, setPassword] = useState("")
   const [plate, setPlate] = useState("")
   const [vehicleBody, setVehicleBody] = useState("")
-  const [walletMode, setWalletMode] =
-    useState<WalletMode>("paytaca_walletconnect")
-  const [paytacaConnection, setPaytacaConnection] =
-    useState<PaytacaWalletConnection | null>(null)
-  const [paytacaUri, setPaytacaUri] = useState("")
-  const [paytacaPublicKey, setPaytacaPublicKey] = useState("")
-  const [generatedWallet, setGeneratedWallet] =
-    useState<GeneratedBchWallet | null>(null)
   const [loading, setLoading] = useState(false)
-  const [walletLoading, setWalletLoading] = useState(false)
   const [error, setError] = useState(initialError)
 
   const roleLabel = role === "passenger" ? "Passenger" : "Driver"
-  const walletReady =
-    walletMode === "paytaca_walletconnect"
-      ? Boolean(paytacaConnection && paytacaPublicKey)
-      : Boolean(generatedWallet)
   const registrationReady =
     displayName.trim().length > 1 &&
     email.trim().length > 3 &&
     password.length >= 6 &&
     (role !== "driver" ||
-      (plate.trim().length > 2 && vehicleBody.trim().length > 2)) &&
-    walletReady
-
-  const startPaytacaConnection = async () => {
-    setWalletLoading(true)
-    setError("")
-    setPaytacaConnection(null)
-    setPaytacaPublicKey("")
-    setPaytacaUri("")
-    try {
-      const connection = await connectPaytacaWallet(setPaytacaUri)
-      const challenge = createBchOwnershipChallenge(connection.address)
-      const signature = await requestPaytacaMessageSignature(connection, challenge)
-      const publicKey = verifyBchAddressOwnershipSignature(
-        connection.address,
-        challenge,
-        signature,
-      )
-      setPaytacaConnection(connection)
-      setPaytacaPublicKey(publicKey)
-      setPaytacaUri("")
-    } catch (cause) {
-      setPaytacaUri("")
-      setError(friendlyAuthError(cause))
-    } finally {
-      setWalletLoading(false)
-    }
-  }
+      (plate.trim().length > 2 && vehicleBody.trim().length > 2))
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -188,17 +139,11 @@ function RoleLoginPanel({
         return
       }
 
-      const address =
-        walletMode === "paytaca_walletconnect"
-          ? (paytacaConnection?.address ?? "")
-          : (generatedWallet?.address ?? "")
-      const bchPublicKey =
-        walletMode === "paytaca_walletconnect"
-          ? paytacaPublicKey
-          : publicKeyForLocalBchWallet(
-              generatedWallet?.privateKeyWif ?? "",
-              generatedWallet?.address ?? "",
-            )
+      const generatedWallet = generateBchWallet()
+      const bchPublicKey = publicKeyForLocalBchWallet(
+        generatedWallet.privateKeyWif,
+        generatedWallet.address,
+      )
 
       onRegistrationStateChange(true)
       try {
@@ -206,21 +151,16 @@ function RoleLoginPanel({
           displayName,
           email,
           password,
-          bchAddress: address,
-          walletMode,
+          bchAddress: generatedWallet.address,
+          walletMode: "local_wallet",
           bchPublicKey,
-          ...(walletMode === "paytaca_walletconnect" && paytacaConnection
-            ? { walletConnectTopic: paytacaConnection.topic }
-            : {}),
           plate,
           vehicleBody,
         })
-        if (walletMode === "local_wallet" && generatedWallet) {
-          linkPasadaWalletSigningKey(
-            generatedWallet.address,
-            generatedWallet.privateKeyWif,
-          )
-        }
+        linkPasadaWalletSigningKey(
+          generatedWallet.address,
+          generatedWallet.privateKeyWif,
+        )
         await onRegistrationComplete()
       } finally {
         onRegistrationStateChange(false)
@@ -301,59 +241,10 @@ function RoleLoginPanel({
               <p className="font-mono text-[9px] tracking-[0.14em] text-white/45 uppercase">
                 BCH wallet
               </p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <WalletChoice
-                  active={walletMode === "paytaca_walletconnect"}
-                  onClick={() => setWalletMode("paytaca_walletconnect")}
-                  title="Connect Paytaca"
-                  detail="WalletConnect"
-                />
-                <WalletChoice
-                  active={walletMode === "local_wallet"}
-                  onClick={() => {
-                    setWalletMode("local_wallet")
-                    setGeneratedWallet((wallet) => wallet ?? generateBchWallet())
-                  }}
-                  title="Create wallet"
-                  detail="In this browser"
-                />
-              </div>
-
-              {walletMode === "paytaca_walletconnect" ? (
-                <div className="mt-3 space-y-3">
-                  {paytacaUri ? (
-                    <div className="flex flex-col items-center gap-3 rounded-xl bg-white/8 p-3 text-center">
-                      <QRCode value={paytacaUri} raw size={164} />
-                      <p className="text-[10px] leading-relaxed text-white/60">
-                        Scan with Paytaca, approve the BCH Chipnet connection,
-                        then approve the ownership message.
-                      </p>
-                    </div>
-                  ) : paytacaConnection ? (
-                    <p className="rounded-xl bg-emerald-500/15 p-3 text-[11px] break-all text-emerald-200">
-                      Paytaca address verified: {paytacaConnection.address}
-                    </p>
-                  ) : (
-                    <p className="text-[10px] leading-relaxed text-white/55">
-                      Connect directly to Paytaca through WalletConnect. PASADA
-                      never asks for or receives a recovery phrase, WIF, or
-                      private key.
-                    </p>
-                  )}
-                  <Button
-                    full
-                    variant="blue"
-                    disabled={walletLoading}
-                    onClick={() => void startPaytacaConnection()}
-                  >
-                    {walletLoading
-                      ? "Waiting for Paytaca..."
-                      : paytacaConnection
-                        ? "Reconnect Paytaca"
-                        : "Connect Paytaca"}
-                  </Button>
-                </div>
-              ) : null}
+              <p className="mt-2 text-[11px] leading-relaxed text-white/55">
+                PASADA creates a secure BCH Chipnet wallet in this browser when
+                you register. Firebase receives public wallet data only.
+              </p>
             </div>
           )}
 
@@ -425,32 +316,5 @@ function AuthField({
         className="w-full rounded-xl border border-white/12 bg-white/8 px-4 py-3 text-[13px] text-white outline-none placeholder:text-white/25 focus:border-pasada-blue"
       />
     </label>
-  )
-}
-
-function WalletChoice({
-  active,
-  onClick,
-  title,
-  detail,
-}: {
-  active: boolean
-  onClick: () => void
-  title: string
-  detail: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-xl border p-2.5 text-left ${
-        active ? "border-pasada-blue bg-pasada-blue/15" : "border-white/10"
-      }`}
-    >
-      <span className="block font-display text-[10px] font-bold">{title}</span>
-      <span className="mt-0.5 block text-[8px] leading-tight text-white/45">
-        {detail}
-      </span>
-    </button>
   )
 }

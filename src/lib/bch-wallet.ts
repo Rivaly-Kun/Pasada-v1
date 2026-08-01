@@ -1,16 +1,12 @@
 import {
-  base64ToBin,
-  bigIntToCompactUint,
   binToHex,
   decodeCashAddress,
   decodePrivateKeyWif,
   encodePrivateKeyWif,
   generatePrivateKey,
   hash160,
-  hash256,
   privateKeyToP2pkhCashAddress,
   secp256k1,
-  utf8ToBin,
 } from "@bitauth/libauth"
 
 export type GeneratedBchWallet = {
@@ -149,59 +145,6 @@ export function verifyPublicKeyForBchAddress(
   return normalizedKey
 }
 
-export function createBchOwnershipChallenge(address: string): string {
-  const validated = normalizeAndValidateBchAddress(address)
-  if (!validated.valid) throw new Error(validated.error)
-  const nonce = crypto.getRandomValues(new Uint32Array(4))
-  const nonceText = Array.from(nonce)
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("")
-  return [
-    "PASADA BCH wallet ownership verification",
-    `Address: ${validated.address}`,
-    `Nonce: ${nonceText}`,
-  ].join("\n")
-}
-
-/**
- * Verifies the compact, recoverable Bitcoin Signed Message format emitted by
- * Paytaca and other BCH wallets, then returns the verified public key.
- */
-export function verifyBchAddressOwnershipSignature(
-  address: string,
-  message: string,
-  signatureBase64: string,
-): string {
-  const signature = base64ToBin(signatureBase64.trim())
-  if (signature.length !== 65) {
-    throw new Error("The wallet signature must be a 65-byte Bitcoin Signed Message value.")
-  }
-  const header = signature[0]
-  if (header < 27 || header > 34) {
-    throw new Error("The wallet signature has an unsupported recovery header.")
-  }
-  const recoveryId = (header - (header >= 31 ? 31 : 27)) as 0 | 1 | 2 | 3
-  const prefix = utf8ToBin("Bitcoin Signed Message:\n")
-  const messageBin = utf8ToBin(message)
-  const messageHash = hash256(
-    new Uint8Array([
-      ...bigIntToCompactUint(BigInt(prefix.length)),
-      ...prefix,
-      ...bigIntToCompactUint(BigInt(messageBin.length)),
-      ...messageBin,
-    ]),
-  )
-  const publicKey = secp256k1.recoverPublicKeyCompressed(
-    signature.slice(1),
-    recoveryId,
-    messageHash,
-  )
-  if (typeof publicKey === "string") {
-    throw new Error("The wallet signature could not be verified.")
-  }
-  return verifyPublicKeyForBchAddress(binToHex(publicKey), address)
-}
-
 // ─── Electrum Scripthash ──────────────────────────────────────────────────────
 
 /**
@@ -329,7 +272,7 @@ function queryFulcrumWss(
 
 /**
  * Fetches the confirmed + unconfirmed BCH balance for a given address
- * by querying public Fulcrum Electrum nodes directly via WSS or Paytaca API.
+ * by querying public Fulcrum Electrum nodes directly via WSS or Watchtower.
  *
  * Falls back through multiple nodes.
  * CRITICAL: Throws an error if all network queries fail, so caller can retain
@@ -369,7 +312,7 @@ export async function fetchBchAddressInfo(
     }
   }
 
-  // Attempt 2: Fallback to Paytaca REST balance API
+  // Attempt 2: Fallback to Watchtower REST balance API
   try {
     const base = isChipnet
       ? "https://chipnet.watchtower.cash/api"

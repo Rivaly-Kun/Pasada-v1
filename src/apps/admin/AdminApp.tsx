@@ -817,7 +817,7 @@ function ContractSection({
             )}
             <p className="mt-3 text-[12px] text-ink-500">
               Passenger and driver payout addresses are supplied per-ride from
-              each user&apos;s linked Paytaca wallet. PASADA stores addresses
+              each user's browser-local PASADA wallet. Firebase stores public addresses
               only — never keys or seed phrases.
             </p>
           </Panel>

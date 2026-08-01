@@ -22,8 +22,6 @@ import { satoshisToCentavos } from "./fare"
 import { getScopedFirebase, type AppRole } from "./firebase"
 import type { PasadaAccount, WalletMode } from "./types"
 
-export type WalletSource = WalletMode
-
 export type PasadaRegistration = {
   displayName: string
   email: string
@@ -31,7 +29,6 @@ export type PasadaRegistration = {
   bchAddress: string
   walletMode: WalletMode
   bchPublicKey: string
-  walletConnectTopic?: string
   plate?: string
   vehicleBody?: string
 }
@@ -185,9 +182,6 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       bchAddress: validated.address,
       walletMode: input.walletMode,
       bchPublicKey,
-      ...(input.walletConnectTopic
-        ? { walletConnectTopic: input.walletConnectTopic }
-        : {}),
       ...(role === "driver"
         ? {
             plate: input.plate!.trim().toUpperCase(),
@@ -241,9 +235,6 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
         mode: input.walletMode,
         source: input.walletMode,
         publicKey: bchPublicKey,
-        ...(input.walletConnectTopic
-          ? { walletConnectTopic: input.walletConnectTopic }
-          : {}),
         chainSats: initialBalanceSats,
         createdAt: now,
         updatedAt: now,
@@ -255,7 +246,7 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
         availableSats: initialBalanceSats,
         chainSats: initialBalanceSats,
         lockedSats: 0,
-        chainSource: "paytaca_watchtower",
+        chainSource: "bch_watchtower",
         lastChainSyncAt: now,
         updatedAt: now,
         version: 1,
@@ -315,22 +306,17 @@ export async function loadPasadaAccount(
   const savedWalletMode = String(
     wallet?.mode ?? wallet?.source ?? roleData?.walletMode ?? roleData?.walletSource ?? "",
   )
-  if (savedWalletMode === "address_only") {
+  if (
+    savedWalletMode &&
+    savedWalletMode !== "local_wallet" &&
+    savedWalletMode !== "generated"
+  ) {
     throw new Error(
-      "This account has no PASADA wallet profile. Re-register with Paytaca or a new in-app wallet.",
+      "This account has no PASADA in-app wallet profile. Re-register to create one in this browser.",
     )
   }
-  let walletMode: WalletMode =
-    savedWalletMode === "paytaca_walletconnect" ||
-    savedWalletMode === "local_wallet"
-      ? savedWalletMode
-      : savedWalletMode === "generated"
-        ? "local_wallet"
-        : "paytaca_walletconnect"
+  let walletMode: WalletMode = "local_wallet"
   let bchPublicKey = String(wallet?.publicKey ?? roleData?.bchPublicKey ?? "")
-  let walletConnectTopic = String(
-    wallet?.walletConnectTopic ?? roleData?.walletConnectTopic ?? "",
-  )
   let backfilledLocalPublicKey = false
   if (
     !bchPublicKey &&
@@ -410,7 +396,7 @@ export async function loadPasadaAccount(
         availableSats: 0,
         chainSats: 0,
         lockedSats: 0,
-        chainSource: "paytaca_watchtower",
+        chainSource: "bch_watchtower",
         lastChainSyncAt: now,
         updatedAt: now,
         version: 1,
@@ -422,7 +408,6 @@ export async function loadPasadaAccount(
     address = autoAddress
     validated = { valid: true, address: autoAddress }
     bchPublicKey = autoPublicKey
-    walletConnectTopic = ""
     walletMode = "local_wallet"
   } else if (
     !walletSnapshot.exists() ||
@@ -446,7 +431,6 @@ export async function loadPasadaAccount(
         mode: walletMode,
         source: walletMode,
         publicKey: bchPublicKey,
-        ...(walletConnectTopic ? { walletConnectTopic } : {}),
         updatedAt: Date.now(),
       },
       [`roleAccounts/${role}/${firebaseUser.uid}/balance`]: {
@@ -476,7 +460,6 @@ export async function loadPasadaAccount(
     bchAddress: validated.address,
     bchPublicKey,
     walletMode,
-    ...(walletConnectTopic ? { walletConnectTopic } : {}),
     availableSats,
     availableCentavos: satoshisToCentavos(availableSats),
     authenticated: true,
@@ -513,7 +496,7 @@ export async function refreshPasadaWalletBalance(
         lockedSats: 0,
         platformDebitsSats: 0,
         pendingRideCreditsSats: 0,
-        chainSource: "paytaca_watchtower",
+        chainSource: "bch_watchtower",
         lastChainSyncAt: now,
         updatedAt: now,
         version: Number(current?.version ?? 0) + 1,
