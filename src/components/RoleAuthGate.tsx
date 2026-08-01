@@ -135,8 +135,6 @@ function RoleLoginPanel({
   const [paytacaPublicKey, setPaytacaPublicKey] = useState("")
   const [generatedWallet, setGeneratedWallet] =
     useState<GeneratedBchWallet | null>(null)
-  const [recoverySaved, setRecoverySaved] = useState(false)
-  const [copied, setCopied] = useState<"address" | "key" | null>(null)
   const [loading, setLoading] = useState(false)
   const [walletLoading, setWalletLoading] = useState(false)
   const [error, setError] = useState(initialError)
@@ -145,7 +143,7 @@ function RoleLoginPanel({
   const walletReady =
     walletMode === "paytaca_walletconnect"
       ? Boolean(paytacaConnection && paytacaPublicKey)
-      : Boolean(generatedWallet && recoverySaved)
+      : Boolean(generatedWallet)
   const registrationReady =
     displayName.trim().length > 1 &&
     email.trim().length > 3 &&
@@ -202,12 +200,6 @@ function RoleLoginPanel({
               generatedWallet?.address ?? "",
             )
 
-      if (walletMode === "local_wallet" && generatedWallet) {
-        linkPasadaWalletSigningKey(
-          generatedWallet.address,
-          generatedWallet.privateKeyWif,
-        )
-      }
       onRegistrationStateChange(true)
       try {
         await registerPasada(role, {
@@ -223,6 +215,12 @@ function RoleLoginPanel({
           plate,
           vehicleBody,
         })
+        if (walletMode === "local_wallet" && generatedWallet) {
+          linkPasadaWalletSigningKey(
+            generatedWallet.address,
+            generatedWallet.privateKeyWif,
+          )
+        }
         await onRegistrationComplete()
       } finally {
         onRegistrationStateChange(false)
@@ -232,12 +230,6 @@ function RoleLoginPanel({
     } finally {
       setLoading(false)
     }
-  }
-
-  const copy = async (kind: "address" | "key", value: string) => {
-    await navigator.clipboard.writeText(value)
-    setCopied(kind)
-    window.setTimeout(() => setCopied(null), 1400)
   }
 
   return (
@@ -318,7 +310,10 @@ function RoleLoginPanel({
                 />
                 <WalletChoice
                   active={walletMode === "local_wallet"}
-                  onClick={() => setWalletMode("local_wallet")}
+                  onClick={() => {
+                    setWalletMode("local_wallet")
+                    setGeneratedWallet((wallet) => wallet ?? generateBchWallet())
+                  }}
                   title="Create wallet"
                   detail="In this browser"
                 />
@@ -358,44 +353,7 @@ function RoleLoginPanel({
                         : "Connect Paytaca"}
                   </Button>
                 </div>
-              ) : generatedWallet ? (
-                <div className="mt-3 space-y-2.5">
-                  <RecoveryValue
-                    label="Your BCH address"
-                    value={generatedWallet.address}
-                    copied={copied === "address"}
-                    onCopy={() => void copy("address", generatedWallet.address)}
-                  />
-                  <RecoveryValue
-                    label="Private key — shown only now"
-                    value={generatedWallet.privateKeyWif}
-                    copied={copied === "key"}
-                    onCopy={() => void copy("key", generatedWallet.privateKeyWif)}
-                    danger
-                  />
-                  <label className="flex items-start gap-2 text-[11px] leading-relaxed text-white/65">
-                    <input
-                      type="checkbox"
-                      checked={recoverySaved}
-                      onChange={(event) => setRecoverySaved(event.target.checked)}
-                      className="mt-0.5"
-                    />
-                    I saved the private key. This new wallet stays in this
-                    browser; Firebase receives only public wallet data.
-                  </label>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGeneratedWallet(generateBchWallet())
-                    setRecoverySaved(false)
-                  }}
-                  className="mt-3 w-full rounded-xl border border-white/15 py-3 font-display text-[12px] font-bold hover:bg-white/5"
-                >
-                  Generate secure BCH wallet
-                </button>
-              )}
+              ) : null}
             </div>
           )}
 
@@ -494,33 +452,5 @@ function WalletChoice({
         {detail}
       </span>
     </button>
-  )
-}
-
-function RecoveryValue({
-  label,
-  value,
-  copied,
-  onCopy,
-  danger,
-}: {
-  label: string
-  value: string
-  copied: boolean
-  onCopy: () => void
-  danger?: boolean
-}) {
-  return (
-    <div className={`rounded-xl p-3 ${danger ? "bg-pasada-red/15" : "bg-white/8"}`}>
-      <div className="flex items-center justify-between gap-2">
-        <p className="font-mono text-[8px] tracking-[0.12em] text-white/45 uppercase">
-          {label}
-        </p>
-        <button type="button" onClick={onCopy} className="text-[9px] font-bold text-white/70">
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <p className="num mt-1.5 text-[10px] break-all text-white/85">{value}</p>
-    </div>
   )
 }
