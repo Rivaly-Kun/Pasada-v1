@@ -91,6 +91,8 @@ export interface PasadaAccount {
   firebaseUid: string
   role: "passenger" | "driver"
   displayName: string
+  /** Small profile image stored with the public role profile (optional). */
+  avatarDataUrl?: string
   bchAddress: string
   bchPublicKey: string
   walletMode: WalletMode

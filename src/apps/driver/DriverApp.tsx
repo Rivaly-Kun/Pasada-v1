@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import BchSendCard from "../../components/BchSendCard"
+import FormerRideMessages from "../../components/FormerRideMessages"
+import { subscribeUnreadMessages } from "../../lib/chat-service"
 import MapCanvas from "../../components/MapCanvas"
 import QRCode from "../../components/QRCode"
+import RideReceiptModal from "../../components/RideReceiptModal"
 import { BottomNav, Icons, PhoneFrame } from "../../components/PhoneFrame"
 import { Button, Pill, Row, SectionLabel } from "../../components/ui"
 import WalletSigningKeyCard from "../../components/WalletSigningKeyCard"
@@ -12,7 +16,12 @@ import {
   settlementOutputs,
 } from "../../lib/fare"
 import { useBchPhpQuote } from "../../lib/bch-price"
-import { logoutPasada, refreshPasadaWalletBalance } from "../../lib/auth"
+import {
+  logoutPasada,
+  refreshPasadaWalletBalance,
+  updatePasadaProfile,
+} from "../../lib/auth"
+import { setChatPresence } from "../../lib/chat-service"
 import { landmarkByName, type Point } from "../../lib/geo"
 import { getScopedFirebase } from "../../lib/firebase"
 import {
@@ -41,7 +50,8 @@ import type {
 
 const NAV = [
   { id: "home", label: "Home", icon: Icons.home },
-  { id: "pay", label: "Pay", icon: Icons.pay },
+  { id: "wallet", label: "Wallet", icon: Icons.pay },
+  { id: "messages", label: "Messages", icon: Icons.messages },
   { id: "activity", label: "Activity", icon: Icons.activity },
   { id: "settings", label: "Settings", icon: Icons.settings },
 ]
@@ -68,9 +78,48 @@ export default function DriverApp({
   const [serviceError, setServiceError] = useState("")
   const [acceptingRide, setAcceptingRide] = useState(false)
   const [walletMessage, setWalletMessage] = useState("")
+  const [profile, setProfile] = useState({
+    displayName: account.displayName,
+    avatarDataUrl: account.avatarDataUrl,
+  })
+  const [selectedReceipt, setSelectedReceipt] = useState<LiveRide | null>(null)
+  const [messageRideId, setMessageRideId] = useState<string | null>(null)
+  const [unreadRooms, setUnreadRooms] = useState<Record<string, boolean>>({})
+  // A terminal ride can briefly remain in the driver's Realtime Database
+  // snapshot while its final availability update arrives. Remembering a
+  // dismissed terminal ride prevents that stale snapshot from reopening the
+  // settlement sheet after the driver taps "Back to map".
+  const dismissedRideIds = useRef(new Set<string>())
   const [driverLocation, setDriverLocation] = useState<Point>(() =>
     landmarkByName("Brgy. Cogon, Ormoc"),
   )
+  const profileAccount = useMemo(
+    () => ({ ...account, ...profile }),
+    [account, profile],
+  )
+
+  useEffect(() => {
+    return subscribeUnreadMessages({
+      role: "driver",
+      uid: account.uid,
+      rides: rideHistory,
+      onUnreadChange: setUnreadRooms,
+    })
+  }, [account.uid, rideHistory])
+
+  const hasUnreadMessages = Object.values(unreadRooms).some(Boolean)
+  const navItems = useMemo(
+    () =>
+      NAV.map((item) =>
+        item.id === "messages" ? { ...item, badge: hasUnreadMessages } : item,
+      ),
+    [hasUnreadMessages],
+  )
+
+  useEffect(() => {
+    document.documentElement.dataset.theme =
+      localStorage.getItem("pasada_theme") === "dark" ? "dark" : "light"
+  }, [])
 
   const syncWallet = async () => {
     setWalletMessage("Checking the BCH network...")
@@ -89,7 +138,7 @@ export default function DriverApp({
   }
 
   const driver = {
-    name: account.displayName,
+    name: profileAccount.displayName,
     plate: account.plate || "Plate not set",
     body: account.vehicleBody || "Registered tricycle",
     rating: account.rating ?? 5,
@@ -158,7 +207,7 @@ export default function DriverApp({
         ? driverLocation
         : await browserLocation(driverLocation)
       setDriverLocation(nextLocation)
-      await setDriverPresence(account, !online, nextLocation, {
+      await setDriverPresence(profileAccount, !online, nextLocation, {
         plate: driver.plate,
         body: driver.body,
         rating: driver.rating,
@@ -191,7 +240,12 @@ export default function DriverApp({
     const stopDriver = subscribeDriver(account.uid, (nextDriver) => {
       setDriverRecord(nextDriver)
       setOnline(nextDriver?.online ?? false)
-      if (nextDriver?.assignedRideId) setRideId(nextDriver.assignedRideId)
+      if (
+        nextDriver?.assignedRideId &&
+        !dismissedRideIds.current.has(nextDriver.assignedRideId)
+      ) {
+        setRideId(nextDriver.assignedRideId)
+      }
     })
     return () => {
       stopDriver()
@@ -204,6 +258,13 @@ export default function DriverApp({
     () => subscribeRideHistory("driver", account.uid, setRideHistory),
     [account.uid],
   )
+
+  useEffect(() => {
+    void setChatPresence("driver", account.uid, true).catch(() => undefined)
+    return () => {
+      void setChatPresence("driver", account.uid, false).catch(() => undefined)
+    }
+  }, [account.uid])
 
   useEffect(() => {
     if (!rideId) return
@@ -271,9 +332,11 @@ export default function DriverApp({
   }, [online, stage, account.uid])
 
   const reset = () => {
+    if (rideId) dismissedRideIds.current.add(rideId)
     setPin("")
     setRideId(null)
     setLiveRide(null)
+    setServiceError("")
   }
 
   return (
@@ -645,6 +708,20 @@ export default function DriverApp({
                     </Button>
                   </div>
                 )}
+              <div className="mt-3">
+                <Button
+                  full
+                  variant="subtle"
+                  onClick={() => {
+                    setServiceError("")
+                    setRideId(null)
+                    setLiveRide(null)
+                    setTab("home")
+                  }}
+                >
+                  Return to Home
+                </Button>
+              </div>
             </div>
           )}
 
@@ -808,22 +885,50 @@ export default function DriverApp({
         </div>
       )}
 
-      {tab === "pay" && (
+      {tab === "wallet" && (
         <DriverPay
           balanceSats={earningsSats}
-          account={account}
+          account={profileAccount}
           rides={rideHistory}
           phpPerBchCentavos={bchPhpQuote.phpPerBchCentavos}
           quoteSource={bchPhpQuote.source}
           walletMessage={walletMessage}
           onSync={() => void syncWallet()}
+          onSent={() => void syncWallet()}
         />
       )}
-      {tab === "activity" && <DriverActivity rides={rideHistory} />}
-      {tab === "settings" && <DriverSettings account={account} />}
+      {tab === "activity" && (
+        <DriverActivity rides={rideHistory} onSelectReceipt={setSelectedReceipt} />
+      )}
+      {tab === "messages" && (
+        <FormerRideMessages
+          role="driver"
+          account={profileAccount}
+          rides={rideHistory}
+          focusedRideId={messageRideId}
+        />
+      )}
+      {tab === "settings" && (
+        <DriverSettings
+          account={profileAccount}
+          onProfileSaved={(nextProfile) => setProfile(nextProfile)}
+        />
+      )}
 
       {(tab !== "home" || stage === "idle") && (
-        <BottomNav items={NAV} active={tab} onSelect={setTab} />
+        <BottomNav items={navItems} active={tab} onSelect={setTab} />
+      )}
+      {selectedReceipt && (
+        <RideReceiptModal
+          ride={selectedReceipt}
+          role="driver"
+          onClose={() => setSelectedReceipt(null)}
+          onMessage={() => {
+            setMessageRideId(selectedReceipt.id)
+            setSelectedReceipt(null)
+            setTab("messages")
+          }}
+        />
       )}
     </PhoneFrame>
   )
@@ -894,6 +999,7 @@ function DriverPay({
   quoteSource,
   walletMessage = "",
   onSync,
+  onSent,
 }: {
   balanceSats: number
   account: PasadaAccount
@@ -902,6 +1008,7 @@ function DriverPay({
   quoteSource: "CoinGecko" | "Configured fallback"
   walletMessage?: string
   onSync: () => void
+  onSent: () => void
 }) {
   const settled = rides.filter((ride) => ride.status === "settled")
   const balanceCentavos = satoshisToCentavos(balanceSats, {
@@ -949,6 +1056,13 @@ function DriverPay({
           </span>
         </div>
       </div>
+
+      <BchSendCard
+        senderAddress={account.bchAddress}
+        balanceSats={balanceSats}
+        accent="red"
+        onSent={onSent}
+      />
 
       {/* Scannable Driver QR Code */}
       {account.bchAddress && (
@@ -1000,7 +1114,13 @@ function DriverPay({
   )
 }
 
-function DriverActivity({ rides }: { rides: LiveRide[] }) {
+function DriverActivity({
+  rides,
+  onSelectReceipt,
+}: {
+  rides: LiveRide[]
+  onSelectReceipt: (ride: LiveRide) => void
+}) {
   const completed = rides.filter((ride) => ride.status === "settled")
   const cancelled = rides.filter((ride) => ride.status === "cancelled")
   const accepted = rides.filter((ride) => ride.driverId)
@@ -1031,7 +1151,12 @@ function DriverActivity({ rides }: { rides: LiveRide[] }) {
       </div>
       <div className="mt-5 space-y-2">
         {rides.map((ride) => (
-          <div key={ride.id} className="rounded-xl bg-white p-4">
+          <button
+            key={ride.id}
+            type="button"
+            onClick={() => onSelectReceipt(ride)}
+            className="w-full rounded-xl bg-white p-4 text-left transition-transform hover:-translate-y-0.5 hover:ring-1 hover:ring-pasada-blue/30"
+          >
             <div className="flex items-center justify-between gap-3">
               <p className="font-display text-[14px] font-bold">
                 {ride.from} → {ride.to}
@@ -1044,7 +1169,8 @@ function DriverActivity({ rides }: { rides: LiveRide[] }) {
               </Pill>
               <Pill tone="outline">{ride.distanceKm} km</Pill>
             </div>
-          </div>
+            <p className="mt-3 text-[10px] font-bold text-pasada-blue">Tap to view receipt →</p>
+          </button>
         ))}
         {rides.length === 0 && (
           <p className="rounded-xl bg-white p-4 text-[12px] text-ink-300">
@@ -1056,19 +1182,85 @@ function DriverActivity({ rides }: { rides: LiveRide[] }) {
   )
 }
 
-function DriverSettings({ account }: { account: PasadaAccount }) {
-  const displayName = account.displayName
+function DriverSettings({
+  account,
+  onProfileSaved,
+}: {
+  account: PasadaAccount
+  onProfileSaved: (profile: { displayName: string; avatarDataUrl?: string }) => void
+}) {
+  const [displayName, setDisplayName] = useState(account.displayName)
+  const [avatarDataUrl, setAvatarDataUrl] = useState(account.avatarDataUrl)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState("")
+  const [darkMode, setDarkMode] = useState(
+    () => typeof window !== "undefined" && localStorage.getItem("pasada_theme") === "dark",
+  )
+  const avatarInput = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setDisplayName(account.displayName)
+    setAvatarDataUrl(account.avatarDataUrl)
+  }, [account.displayName, account.avatarDataUrl])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? "dark" : "light"
+    localStorage.setItem("pasada_theme", darkMode ? "dark" : "light")
+  }, [darkMode])
+
+  const saveProfile = async () => {
+    setSaving(true)
+    setMessage("")
+    try {
+      await updatePasadaProfile("driver", account.uid, {
+        displayName,
+        avatarDataUrl,
+      })
+      onProfileSaved({ displayName: displayName.trim(), avatarDataUrl })
+      setMessage("Profile saved. Your passenger-facing driver details are updated.")
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Profile could not be saved.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const chooseAvatar = (file?: File) => {
+    if (!file) return
+    if (file.size > 750_000) {
+      setMessage("Choose an image smaller than 750 KB for the demo profile.")
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => setAvatarDataUrl(String(reader.result))
+    reader.readAsDataURL(file)
+  }
+
+  const initials =
+    displayName
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || "D"
   return (
     <div className="scroll-quiet h-full overflow-y-auto bg-ink-50 px-5 pt-14 pb-28">
       <h1 className="font-display text-[26px] font-extrabold">Settings</h1>
       <div className="mt-4 flex items-center gap-3 rounded-xl bg-white p-4">
-        <div className="grid h-12 w-12 place-items-center rounded-full bg-pasada-red font-display font-bold text-white">
-          {displayName
-            .split(" ")
-            .slice(0, 2)
-            .map((part) => part[0])
-            .join("")}
-        </div>
+        <button
+          type="button"
+          onClick={() => avatarInput.current?.click()}
+          className="relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full bg-pasada-red font-display font-bold text-white"
+          aria-label="Choose profile photo"
+        >
+          {avatarDataUrl ? (
+            <img src={avatarDataUrl} alt="Profile" className="h-full w-full object-cover" />
+          ) : (
+            initials
+          )}
+          <span className="absolute inset-x-0 bottom-0 bg-ink/65 py-0.5 text-center text-[8px]">Edit</span>
+        </button>
         <div>
           <p className="font-display text-[15px] font-bold">{displayName}</p>
           <p className="text-[11px] text-ink-500">
@@ -1078,6 +1270,59 @@ function DriverSettings({ account }: { account: PasadaAccount }) {
         <span className="ml-auto">
           <Pill tone="blue">Approved</Pill>
         </span>
+      </div>
+
+      <input
+        ref={avatarInput}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => chooseAvatar(event.target.files?.[0])}
+      />
+
+      <div className="mt-3 rounded-xl bg-white p-4">
+        <SectionLabel>Editable driver profile</SectionLabel>
+        <label className="mt-3 block text-[11px] font-semibold text-ink-500">Display name</label>
+        <input
+          value={displayName}
+          onChange={(event) => setDisplayName(event.target.value)}
+          maxLength={50}
+          className="mt-1.5 w-full rounded-xl bg-ink-50 px-3 py-3 text-[13px] outline-none ring-1 ring-ink-100 focus:ring-pasada-blue"
+        />
+        <button
+          type="button"
+          onClick={() => avatarInput.current?.click()}
+          className="mt-3 text-[11px] font-bold text-pasada-blue"
+        >
+          {avatarDataUrl ? "Change profile photo" : "Add profile photo"}
+        </button>
+        <div className="mt-3">
+          <Button full onClick={() => void saveProfile()} disabled={saving}>
+            {saving ? "Saving profile…" : "Save profile"}
+          </Button>
+        </div>
+        {message && (
+          <p className={`mt-2 text-[10px] ${message.startsWith("Profile saved") ? "text-[#0a9d72]" : "text-pasada-red"}`}>
+            {message}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-3 rounded-xl bg-white px-4">
+        <div className="flex items-center justify-between gap-4 py-3.5">
+          <div>
+            <p className="text-[13px] font-semibold text-ink-700">Dark mode</p>
+            <p className="mt-0.5 text-[10px] text-ink-500">Use a low-light interface for evening shifts.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDarkMode((value) => !value)}
+            aria-pressed={darkMode}
+            className={`relative h-7 w-12 shrink-0 overflow-hidden rounded-full transition-colors ${darkMode ? "bg-pasada-blue" : "bg-ink-100"}`}
+          >
+            <span className={`absolute top-1 left-1 h-5 w-5 rounded-full bg-[#ffffff] shadow transition-transform ${darkMode ? "translate-x-5" : "translate-x-0"}`} />
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 rounded-xl bg-white p-4">

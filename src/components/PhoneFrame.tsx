@@ -1,9 +1,22 @@
 import type { ReactNode } from 'react'
 
-export function PhoneFrame({ children }: { children: ReactNode; chrome?: string }) {
+export function PhoneFrame({
+  children,
+  variant = "app",
+}: {
+  children: ReactNode
+  chrome?: string
+  variant?: "app" | "auth"
+}) {
   return (
     <div className="relative mx-auto w-full max-w-[400px]">
-      <div className="relative h-[812px] overflow-hidden rounded-[38px] bg-white shadow-[0_40px_90px_-30px_rgba(11,11,12,0.55)] ring-1 ring-ink/10">
+      <div
+        className={`relative h-[812px] overflow-hidden bg-white shadow-[0_40px_90px_-30px_rgba(11,11,12,0.55)] ${
+          variant === "auth"
+            ? "rounded-[42px] border-[6px] border-ink"
+            : "rounded-[38px] ring-1 ring-ink/10"
+        }`}
+      >
         {children}
       </div>
     </div>
@@ -14,6 +27,7 @@ export interface NavItem {
   id: string
   label: string
   icon: ReactNode
+  badge?: boolean | number
 }
 
 export function BottomNav({
@@ -26,7 +40,7 @@ export function BottomNav({
   onSelect: (id: string) => void
 }) {
   return (
-    <nav className="absolute inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-ink-100 bg-white/95 px-2 pt-2 pb-5 backdrop-blur">
+    <nav className={`absolute inset-x-0 bottom-0 z-30 grid border-t border-ink-100 bg-white/95 px-2 pt-2 pb-5 backdrop-blur ${items.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
       {items.map((item) => {
         const on = item.id === active
         return (
@@ -37,8 +51,14 @@ export function BottomNav({
             aria-current={on ? 'page' : undefined}
             className={`flex flex-col items-center gap-1 rounded-lg py-1.5 transition-colors ${on ? 'text-ink' : 'text-ink-300 hover:text-ink-500'}`}
           >
-            <span className={on ? 'scale-110 transition-transform' : 'transition-transform'}>
+            <span className={`relative ${on ? 'scale-110 transition-transform' : 'transition-transform'}`}>
               {item.icon}
+              {Boolean(item.badge) && (
+                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-pasada-red opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-pasada-red ring-2 ring-white" />
+                </span>
+              )}
             </span>
             <span className="font-display text-[10px] font-bold tracking-[0.04em]">
               {item.label}
@@ -74,6 +94,12 @@ export const Icons = {
   activity: (
     <svg width="21" height="21" viewBox="0 0 24 24" {...stroke}>
       <path d="M3 12h4l2.5-6 4 12 2.5-6h5" />
+    </svg>
+  ),
+  messages: (
+    <svg width="21" height="21" viewBox="0 0 24 24" {...stroke}>
+      <path d="M20.5 11.5a7.8 7.8 0 0 1-8.1 7.5 9.2 9.2 0 0 1-3.7-.8L3.5 20l1.3-4.2A7.1 7.1 0 0 1 3.5 11a7.8 7.8 0 0 1 8.1-7.5 7.8 7.8 0 0 1 8.9 8Z" />
+      <path d="M8 11h.01M12 11h.01M16 11h.01" strokeWidth={2.8} />
     </svg>
   ),
   settings: (

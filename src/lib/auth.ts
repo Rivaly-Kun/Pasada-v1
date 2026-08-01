@@ -20,6 +20,12 @@ import {
 } from "./bch-wallet"
 import { satoshisToCentavos } from "./fare"
 import { getScopedFirebase, type AppRole } from "./firebase"
+import {
+  removeStoredIdentityDocuments,
+  storeApprovedIdentityDocuments,
+  type ApprovedIdentityVerification,
+  type StoredIdentityVerification,
+} from "./identity-verification"
 import type { PasadaAccount, WalletMode } from "./types"
 
 export type PasadaRegistration = {
@@ -29,6 +35,7 @@ export type PasadaRegistration = {
   bchAddress: string
   walletMode: WalletMode
   bchPublicKey: string
+  identityVerification: ApprovedIdentityVerification
   plate?: string
   vehicleBody?: string
 }
@@ -44,6 +51,32 @@ export function hasLocalPasadaWalletKey(address: string): boolean {
   return Boolean(
     validated.valid && localStorage.getItem(localWalletKey(validated.address)),
   )
+}
+
+/**
+ * Reads and validates the browser-local signing key for an in-app wallet.
+ * The key is returned only to local transaction code and is never uploaded.
+ */
+export function getLocalPasadaWalletSigningKey(address: string): string {
+  if (typeof window === "undefined") {
+    throw new Error("A BCH transaction can only be signed in a browser.")
+  }
+  const validatedAddress = normalizeAndValidateBchAddress(address)
+  if (!validatedAddress.valid) throw new Error(validatedAddress.error)
+  const privateKeyWif = localStorage.getItem(
+    localWalletKey(validatedAddress.address),
+  )
+  if (!privateKeyWif) {
+    throw new Error(
+      "Open PASADA in the browser where this wallet was created to send BCH.",
+    )
+  }
+  const validatedKey = validatePrivateKeyForBchAddress(
+    privateKeyWif,
+    validatedAddress.address,
+  )
+  if (!validatedKey.valid) throw new Error(validatedKey.error)
+  return validatedKey.privateKeyWif
 }
 
 /**
@@ -104,6 +137,20 @@ export async function loginPasada(
 }
 
 export async function registerPasada(role: AppRole, input: PasadaRegistration) {
+  if (
+    !input.identityVerification?.approved ||
+    input.identityVerification.role !== role
+  ) {
+    throw new Error("Complete the AI identity verification before registering.")
+  }
+  if (Date.now() - input.identityVerification.approvedAt > 15 * 60 * 1000) {
+    throw new Error("Your identity check expired. Verify the ID images again before registering.")
+  }
+  if (
+    input.identityVerification.verifiedDisplayName !== input.displayName.trim()
+  ) {
+    throw new Error("Your display name changed. Verify the ID images again before registering.")
+  }
   const validated = normalizeAndValidateBchAddress(input.bchAddress)
   if (!validated.valid) throw new Error(validated.error)
   const bchPublicKey = verifyPublicKeyForBchAddress(
@@ -164,12 +211,18 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
   const now = Date.now()
   const uid = credential.user.uid
   const roleCollection = role === "passenger" ? "passengers" : "drivers"
+  let storedIdentityVerification: StoredIdentityVerification | undefined
   try {
     const [userSnapshot, roleSnapshot, balanceSnapshot] = await Promise.all([
       get(ref(scoped.database, `users/${uid}`)),
       get(ref(scoped.database, `${roleCollection}/${uid}`)),
       get(ref(scoped.database, `roleAccounts/${role}/${uid}/balance`)),
     ])
+    storedIdentityVerification = await storeApprovedIdentityDocuments(
+      role,
+      uid,
+      input.identityVerification,
+    )
     await updateProfile(credential.user, {
       displayName: input.displayName.trim(),
     })
@@ -182,6 +235,7 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       bchAddress: validated.address,
       walletMode: input.walletMode,
       bchPublicKey,
+      identityVerification: storedIdentityVerification,
       ...(role === "driver"
         ? {
             plate: input.plate!.trim().toUpperCase(),
@@ -256,6 +310,7 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
     // Subscribe to Watchtower so it starts indexing this address on-chain immediately
     void subscribeAddressToWatchtower(validated.address)
   } catch (error) {
+    await removeStoredIdentityDocuments(role, storedIdentityVerification)
     if (createdAuthUser)
       await deleteUser(credential.user).catch(() => undefined)
     else await signOut(scoped.auth).catch(() => undefined)
@@ -457,6 +512,7 @@ export async function loadPasadaAccount(
     displayName: String(
       roleData?.displayName ?? firebaseUser.displayName ?? role,
     ),
+    avatarDataUrl: String(roleData?.avatarDataUrl ?? "") || undefined,
     bchAddress: validated.address,
     bchPublicKey,
     walletMode,
@@ -470,6 +526,48 @@ export async function loadPasadaAccount(
         : undefined,
     rating: role === "driver" ? Number(roleData?.rating ?? 5) : undefined,
     trips: role === "driver" ? Number(roleData?.trips ?? 0) : undefined,
+  }
+}
+
+/** Updates the public profile shown to the rider or driver in PASADA. */
+export async function updatePasadaProfile(
+  role: AppRole,
+  uid: string,
+  profile: { displayName: string; avatarDataUrl?: string },
+): Promise<void> {
+  const displayName = profile.displayName.trim()
+  if (displayName.length < 2) {
+    throw new Error("Please enter a name with at least 2 characters.")
+  }
+
+  const scoped = getScopedFirebase(role)
+  const roleCollection = role === "passenger" ? "passengers" : "drivers"
+  const now = Date.now()
+  const writes: Record<string, unknown> = {
+    [`users/${uid}/displayName`]: displayName,
+    [`users/${uid}/roleProfiles/${role}/displayName`]: displayName,
+    [`users/${uid}/roleProfiles/${role}/updatedAt`]: now,
+    [`${roleCollection}/${uid}/displayName`]: displayName,
+    [`${roleCollection}/${uid}/updatedAt`]: now,
+    [`users/${uid}/updatedAt`]: now,
+  }
+
+  if (role === "driver") {
+    // Live dispatch reads `drivers/{uid}/name`, while the account profile uses
+    // `displayName`; keep both in sync so a saved edit reaches new bookings.
+    writes[`drivers/${uid}/name`] = displayName
+  }
+
+  if (profile.avatarDataUrl !== undefined) {
+    writes[`users/${uid}/roleProfiles/${role}/avatarDataUrl`] =
+      profile.avatarDataUrl || null
+    writes[`${roleCollection}/${uid}/avatarDataUrl`] =
+      profile.avatarDataUrl || null
+  }
+
+  await update(ref(scoped.database), writes)
+  if (scoped.auth.currentUser) {
+    await updateProfile(scoped.auth.currentUser, { displayName })
   }
 }
 

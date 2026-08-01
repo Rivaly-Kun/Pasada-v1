@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { PhoneFrame } from "./PhoneFrame"
+import IdentityVerificationPanel from "./IdentityVerificationPanel"
 import { Button } from "./ui"
 import {
   friendlyAuthError,
@@ -15,6 +16,7 @@ import {
   publicKeyForLocalBchWallet,
 } from "../lib/bch-wallet"
 import type { AppRole } from "../lib/firebase"
+import type { ApprovedIdentityVerification } from "../lib/identity-verification"
 import type { PasadaAccount } from "../lib/types"
 
 export default function RoleAuthGate({
@@ -63,11 +65,12 @@ export default function RoleAuthGate({
 
   if (!initialized) {
     return (
-      <PhoneFrame chrome={role.toUpperCase()}>
-        <div className="grid h-full place-items-center bg-ink text-center text-white">
+      <PhoneFrame chrome={role.toUpperCase()} variant="auth">
+        <div className="grid h-full place-items-center bg-white text-center text-ink">
           <div>
-            <span className="mx-auto block h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-pasada-red" />
-            <p className="mt-4 font-mono text-[10px] tracking-[0.14em] text-white/60 uppercase">
+            <img src="/img/pasada-icon.png" alt="PASADA" className="mx-auto h-16 w-24 object-contain" />
+            <span className="mx-auto mt-3 block h-7 w-7 animate-spin rounded-full border-2 border-ink-100 border-t-pasada-red" />
+            <p className="mt-4 font-mono text-[10px] tracking-[0.14em] text-ink-500 uppercase">
               Restoring PASADA session...
             </p>
           </div>
@@ -118,14 +121,22 @@ function RoleLoginPanel({
   const [password, setPassword] = useState("")
   const [plate, setPlate] = useState("")
   const [vehicleBody, setVehicleBody] = useState("")
+  const [identityVerification, setIdentityVerification] =
+    useState<ApprovedIdentityVerification | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(initialError)
+
+  // Login stays intentionally light and distinct from the in-app appearance.
+  useEffect(() => {
+    document.documentElement.dataset.theme = "light"
+  }, [])
 
   const roleLabel = role === "passenger" ? "Passenger" : "Driver"
   const registrationReady =
     displayName.trim().length > 1 &&
     email.trim().length > 3 &&
     password.length >= 6 &&
+    Boolean(identityVerification) &&
     (role !== "driver" ||
       (plate.trim().length > 2 && vehicleBody.trim().length > 2))
 
@@ -137,6 +148,9 @@ function RoleLoginPanel({
       if (mode === "login") {
         await loginPasada(role, email, password)
         return
+      }
+      if (!identityVerification) {
+        throw new Error("Verify your required ID images before creating an account.")
       }
 
       const generatedWallet = generateBchWallet()
@@ -154,6 +168,7 @@ function RoleLoginPanel({
           bchAddress: generatedWallet.address,
           walletMode: "local_wallet",
           bchPublicKey,
+          identityVerification,
           plate,
           vehicleBody,
         })
@@ -173,26 +188,64 @@ function RoleLoginPanel({
   }
 
   return (
-    <PhoneFrame chrome={role.toUpperCase()}>
-      <div className="scroll-quiet h-full overflow-y-auto bg-ink px-5 pt-14 pb-8 text-white">
-        <p
-          className={`font-mono text-[10px] tracking-[0.18em] uppercase ${
-            role === "passenger" ? "text-pasada-blue" : "text-pasada-red"
-          }`}
-        >
-          PASADA {roleLabel} app
-        </p>
-        <h1 className="mt-2 font-display text-[28px] leading-tight font-black">
-          {mode === "login"
-            ? `${roleLabel} login`
-            : `Create ${roleLabel.toLowerCase()} account`}
-        </h1>
-        <p className="mt-2 text-[12px] leading-relaxed text-white/55">
-          This session is independent from the {" "}
-          {role === "passenger" ? "driver" : "passenger"} app.
-        </p>
+    <PhoneFrame chrome={role.toUpperCase()} variant="auth">
+      <div className="scroll-quiet h-full overflow-y-auto bg-white px-5 pt-7 pb-8 text-ink">
+        <header className="text-center">
+          <img
+            src="/img/pasada-icon.png"
+            alt="PASADA BCH tricycle"
+            className="mx-auto h-[72px] w-[122px] object-contain"
+          />
+          <div className="mt-1 flex items-center justify-center gap-2">
+            <span className="font-display text-[18px] font-black tracking-tight">PASADA</span>
+            <span className="h-1 w-1 rounded-full bg-ink-300" />
+            <span className="font-mono text-[9px] tracking-[0.14em] text-ink-400 uppercase">
+              Ormoc City
+            </span>
+          </div>
+          <p
+            className={`mt-4 font-mono text-[9px] font-bold tracking-[0.17em] uppercase ${
+              role === "passenger" ? "text-pasada-blue" : "text-pasada-red"
+            }`}
+          >
+            {roleLabel} access
+          </p>
+          <h1 className="mt-1 font-display text-[25px] leading-tight font-black">
+            {mode === "login"
+              ? `Welcome ${role === "passenger" ? "aboard" : "back"}`
+              : `Join PASADA`}
+          </h1>
+          <p className="mx-auto mt-2 max-w-[276px] text-[11px] leading-relaxed text-ink-500">
+            {mode === "login"
+              ? `Sign in to your ${role.toLowerCase()} app and continue your journey.`
+              : `Create your ${role.toLowerCase()} account in a few secure steps.`}
+          </p>
+        </header>
 
-        <form onSubmit={submit} className="mt-6 space-y-4">
+        <div className="mt-5 grid grid-cols-2 rounded-xl bg-ink-50 p-1">
+          {(["login", "register"] as const).map((option) => {
+            const active = mode === option
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => {
+                  setMode(option)
+                  setError("")
+                }}
+                className={`rounded-lg py-2 text-[11px] font-bold transition-colors ${
+                  active
+                    ? "bg-white text-ink shadow-sm"
+                    : "text-ink-400 hover:text-ink-700"
+                }`}
+              >
+                {option === "login" ? "Log in" : "Create account"}
+              </button>
+            )
+          })}
+        </div>
+
+        <form onSubmit={submit} className="mt-5 space-y-3.5">
           {mode === "register" && (
             <AuthField
               label="Display name"
@@ -237,11 +290,19 @@ function RoleLoginPanel({
           )}
 
           {mode === "register" && (
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3.5">
-              <p className="font-mono text-[9px] tracking-[0.14em] text-white/45 uppercase">
+            <IdentityVerificationPanel
+              role={role}
+              displayName={displayName}
+              onVerificationChange={setIdentityVerification}
+            />
+          )}
+
+          {mode === "register" && (
+            <div className={`rounded-2xl border p-3.5 ${role === "passenger" ? "border-pasada-blue/20 bg-pasada-blue/5" : "border-pasada-red/20 bg-pasada-red/5"}`}>
+              <p className={`font-mono text-[9px] tracking-[0.14em] uppercase ${role === "passenger" ? "text-pasada-blue" : "text-pasada-red"}`}>
                 BCH wallet
               </p>
-              <p className="mt-2 text-[11px] leading-relaxed text-white/55">
+              <p className="mt-2 text-[11px] leading-relaxed text-ink-500">
                 PASADA creates a secure BCH Chipnet wallet in this browser when
                 you register. Firebase receives public wallet data only.
               </p>
@@ -249,13 +310,14 @@ function RoleLoginPanel({
           )}
 
           {error && (
-            <p className="rounded-xl bg-pasada-red/15 px-3 py-2.5 text-[12px] text-red-200">
+            <p className="rounded-xl bg-pasada-red/10 px-3 py-2.5 text-[12px] text-pasada-red">
               {error}
             </p>
           )}
           <Button
             type="submit"
             full
+            variant={role === "passenger" ? "blue" : "red"}
             disabled={loading || (mode === "register" && !registrationReady)}
           >
             {loading
@@ -266,18 +328,9 @@ function RoleLoginPanel({
           </Button>
         </form>
 
-        <button
-          type="button"
-          onClick={() => {
-            setMode((current) => (current === "login" ? "register" : "login"))
-            setError("")
-          }}
-          className="mt-5 w-full text-center text-[12px] font-semibold text-white/70"
-        >
-          {mode === "login"
-            ? `New ${roleLabel.toLowerCase()}? Create an account`
-            : "Already registered? Log in"}
-        </button>
+        <p className="mt-5 text-center text-[10px] leading-relaxed text-ink-400">
+          Passenger and driver sessions are independent. Your BCH wallet key stays in this browser.
+        </p>
       </div>
     </PhoneFrame>
   )
@@ -302,7 +355,7 @@ function AuthField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block font-mono text-[9px] tracking-[0.14em] text-white/45 uppercase">
+      <span className="mb-1.5 block font-mono text-[9px] tracking-[0.14em] text-ink-500 uppercase">
         {label}
       </span>
       <input
@@ -313,7 +366,7 @@ function AuthField({
         minLength={minLength}
         placeholder={placeholder}
         required
-        className="w-full rounded-xl border border-white/12 bg-white/8 px-4 py-3 text-[13px] text-white outline-none placeholder:text-white/25 focus:border-pasada-blue"
+        className="w-full rounded-xl border border-ink-100 bg-ink-50 px-4 py-3 text-[13px] text-ink outline-none placeholder:text-ink-300 focus:border-pasada-blue focus:bg-white"
       />
     </label>
   )

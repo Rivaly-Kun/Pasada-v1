@@ -1,0 +1,24 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Reference example folders with public read access. Folder names contain
+    // spaces, so they must be matched through a path variable.
+    match /{folder}/{allPaths=**} {
+      allow read: if folder == 'National ID example'
+        || folder == 'Student Id Exammple'
+        || folder == 'Drivers License Example'
+        || folder == 'reference-example'
+        || folder == 'public';
+    }
+
+    // Identity verifications strictly restricted to authenticated owner
+    match /identity-verifications/{role}/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Fallback for all other authenticated requests
+    match /{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

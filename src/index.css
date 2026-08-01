@@ -37,6 +37,11 @@
     color: var(--color-ink);
   }
 
+  html[data-theme='dark'] body {
+    background: #111319;
+    color: #f6f7fb;
+  }
+
   h1,
   h2,
   h3,
@@ -55,6 +60,20 @@
     outline-offset: 2px;
   }
 }
+
+/* The app keeps its familiar surfaces in light mode and flips them together
+   when a rider chooses dark mode. The constrained selectors avoid affecting
+   map colours and BCH status colours. */
+html[data-theme='dark'] .bg-ink-50 { background-color: #171a21 !important; }
+html[data-theme='dark'] .bg-white { background-color: #22262f !important; }
+html[data-theme='dark'] .bg-white\/95 { background-color: rgb(34 38 47 / 95%) !important; }
+html[data-theme='dark'] .text-ink { color: #f6f7fb !important; }
+html[data-theme='dark'] .text-ink-700 { color: #e2e5ec !important; }
+html[data-theme='dark'] .text-ink-500 { color: #b8bdc9 !important; }
+html[data-theme='dark'] .text-ink-300 { color: #89909e !important; }
+html[data-theme='dark'] .border-ink-100,
+html[data-theme='dark'] .divide-ink-100 > :not(:last-child) { border-color: #3a404d !important; }
+html[data-theme='dark'] .bg-ink-100 { background-color: #3a404d !important; }
 
 @layer utilities {
   /* Scrollbars stay out of the way until the surface is actually scrolling. */
