@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { PhoneFrame } from "./PhoneFrame"
 import QRCode from "./QRCode"
 import { Button } from "./ui"
@@ -14,7 +14,6 @@ import {
 import {
   createBchOwnershipChallenge,
   generateBchWallet,
-  normalizeAndValidateBchAddress,
   publicKeyForLocalBchWallet,
   type GeneratedBchWallet,
   verifyBchAddressOwnershipSignature,
@@ -130,11 +129,6 @@ function RoleLoginPanel({
   const [vehicleBody, setVehicleBody] = useState("")
   const [walletMode, setWalletMode] =
     useState<WalletMode>("paytaca_walletconnect")
-  const [existingAddress, setExistingAddress] = useState("")
-  const [addressChallenge, setAddressChallenge] = useState("")
-  const [addressSignature, setAddressSignature] = useState("")
-  const [addressPublicKey, setAddressPublicKey] = useState("")
-  const [addressProofMessage, setAddressProofMessage] = useState("")
   const [paytacaConnection, setPaytacaConnection] =
     useState<PaytacaWalletConnection | null>(null)
   const [paytacaUri, setPaytacaUri] = useState("")
@@ -147,17 +141,11 @@ function RoleLoginPanel({
   const [walletLoading, setWalletLoading] = useState(false)
   const [error, setError] = useState(initialError)
 
-  const addressValidation = useMemo(
-    () => normalizeAndValidateBchAddress(existingAddress),
-    [existingAddress],
-  )
   const roleLabel = role === "passenger" ? "Passenger" : "Driver"
   const walletReady =
     walletMode === "paytaca_walletconnect"
       ? Boolean(paytacaConnection && paytacaPublicKey)
-      : walletMode === "local_wallet"
-        ? Boolean(generatedWallet && recoverySaved)
-        : Boolean(addressValidation.valid && addressChallenge && addressPublicKey)
+      : Boolean(generatedWallet && recoverySaved)
   const registrationReady =
     displayName.trim().length > 1 &&
     email.trim().length > 3 &&
@@ -192,35 +180,6 @@ function RoleLoginPanel({
     }
   }
 
-  const createAddressChallenge = () => {
-    if (!addressValidation.valid) {
-      setAddressProofMessage(addressValidation.error)
-      return
-    }
-    setAddressChallenge(createBchOwnershipChallenge(addressValidation.address))
-    setAddressSignature("")
-    setAddressPublicKey("")
-    setAddressProofMessage("")
-  }
-
-  const verifyAddressOwnership = () => {
-    try {
-      if (!addressChallenge) {
-        throw new Error("Create a fresh ownership challenge first.")
-      }
-      const publicKey = verifyBchAddressOwnershipSignature(
-        existingAddress,
-        addressChallenge,
-        addressSignature,
-      )
-      setAddressPublicKey(publicKey)
-      setAddressProofMessage("Address ownership verified. No wallet secret was shared.")
-    } catch (cause) {
-      setAddressPublicKey("")
-      setAddressProofMessage(friendlyAuthError(cause))
-    }
-  }
-
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     setLoading(true)
@@ -234,18 +193,14 @@ function RoleLoginPanel({
       const address =
         walletMode === "paytaca_walletconnect"
           ? (paytacaConnection?.address ?? "")
-          : walletMode === "local_wallet"
-            ? (generatedWallet?.address ?? "")
-            : existingAddress
+          : (generatedWallet?.address ?? "")
       const bchPublicKey =
         walletMode === "paytaca_walletconnect"
           ? paytacaPublicKey
-          : walletMode === "local_wallet"
-            ? publicKeyForLocalBchWallet(
-                generatedWallet?.privateKeyWif ?? "",
-                generatedWallet?.address ?? "",
-              )
-            : addressPublicKey
+          : publicKeyForLocalBchWallet(
+              generatedWallet?.privateKeyWif ?? "",
+              generatedWallet?.address ?? "",
+            )
 
       if (walletMode === "local_wallet" && generatedWallet) {
         linkPasadaWalletSigningKey(
@@ -354,7 +309,7 @@ function RoleLoginPanel({
               <p className="font-mono text-[9px] tracking-[0.14em] text-white/45 uppercase">
                 BCH wallet
               </p>
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-2 gap-2">
                 <WalletChoice
                   active={walletMode === "paytaca_walletconnect"}
                   onClick={() => setWalletMode("paytaca_walletconnect")}
@@ -366,12 +321,6 @@ function RoleLoginPanel({
                   onClick={() => setWalletMode("local_wallet")}
                   title="Create wallet"
                   detail="In this browser"
-                />
-                <WalletChoice
-                  active={walletMode === "address_only"}
-                  onClick={() => setWalletMode("address_only")}
-                  title="Link address"
-                  detail="Proof required"
                 />
               </div>
 
@@ -408,79 +357,6 @@ function RoleLoginPanel({
                         ? "Reconnect Paytaca"
                         : "Connect Paytaca"}
                   </Button>
-                </div>
-              ) : walletMode === "address_only" ? (
-                <div className="mt-3 space-y-3">
-                  <AuthField
-                    label="Bitcoin Cash address"
-                    value={existingAddress}
-                    onChange={(value) => {
-                      setExistingAddress(value)
-                      setAddressChallenge("")
-                      setAddressSignature("")
-                      setAddressPublicKey("")
-                      setAddressProofMessage("")
-                    }}
-                    autoComplete="off"
-                    placeholder="bchtest:q..."
-                  />
-                  {existingAddress && (
-                    <p
-                      className={`text-[10px] ${
-                        addressValidation.valid
-                          ? "text-emerald-300"
-                          : "text-pasada-red"
-                      }`}
-                    >
-                      {addressValidation.valid
-                        ? "Valid BCH address. Prove ownership before registering."
-                        : addressValidation.error}
-                    </p>
-                  )}
-                  <button
-                    type="button"
-                    onClick={createAddressChallenge}
-                    disabled={!addressValidation.valid}
-                    className="w-full rounded-xl border border-white/15 py-2.5 text-[11px] font-bold disabled:opacity-35"
-                  >
-                    Create ownership challenge
-                  </button>
-                  {addressChallenge && (
-                    <>
-                      <p className="rounded-xl bg-white/8 p-3 font-mono text-[9px] break-all whitespace-pre-wrap text-white/75">
-                        {addressChallenge}
-                      </p>
-                      <AuthField
-                        label="Signed message"
-                        value={addressSignature}
-                        onChange={setAddressSignature}
-                        autoComplete="off"
-                        placeholder="Base64 wallet signature"
-                      />
-                      <button
-                        type="button"
-                        onClick={verifyAddressOwnership}
-                        disabled={!addressSignature.trim()}
-                        className="w-full rounded-xl border border-pasada-blue/50 py-2.5 text-[11px] font-bold text-pasada-blue disabled:opacity-35"
-                      >
-                        Verify ownership
-                      </button>
-                    </>
-                  )}
-                  {addressProofMessage && (
-                    <p
-                      className={`text-[10px] leading-relaxed ${
-                        addressPublicKey ? "text-emerald-300" : "text-pasada-red"
-                      }`}
-                    >
-                      {addressProofMessage}
-                    </p>
-                  )}
-                  <p className="text-[10px] leading-relaxed text-white/45">
-                    Link a BCH address from any wallet that supports Bitcoin
-                    Signed Message. A signature proves control; it never
-                    exposes your private key.
-                  </p>
                 </div>
               ) : generatedWallet ? (
                 <div className="mt-3 space-y-2.5">

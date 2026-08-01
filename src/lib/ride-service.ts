@@ -90,11 +90,6 @@ async function linkedWalletWif(
         `This ${role} uses Paytaca through WalletConnect. BCH escrow requires an approved Paytaca transaction signature; PASADA never accepts its recovery phrase, WIF, or private key.`,
       )
     }
-    if (walletMode === "address_only") {
-      throw new Error(
-        `This ${role} linked an address for ownership verification only. Connect a signing wallet before using BCH escrow.`,
-      )
-    }
     throw new Error(
       `Open the ${role} wallet in the browser where its in-app BCH wallet was created. Private keys are never read from Firebase.`,
     )

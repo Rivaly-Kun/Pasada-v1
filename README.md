@@ -119,7 +119,6 @@ Account signup records one `walletMode` value in the user profile and role walle
 
 - `paytaca_walletconnect` — creates a WalletConnect v2 `bch:bchtest` session with Paytaca, requests its native BCH signing capabilities, and verifies the selected address through a user-approved `bch_signMessage` request.
 - `local_wallet` — generates a new P2PKH Chipnet wallet in the browser. Its key remains browser-local; Firebase receives only the address and public key.
-- `address_only` — links an existing address only after a recoverable Bitcoin Signed Message is verified against that address. No WIF, recovery phrase, or private key is entered.
 
 Paytaca connectivity requires a WalletConnect/Reown project ID. Add the public client identifier to `.env`:
 

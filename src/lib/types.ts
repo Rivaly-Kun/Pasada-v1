@@ -3,7 +3,6 @@ export type Role = "passenger" | "driver" | "admin"
 export type WalletMode =
   | "paytaca_walletconnect"
   | "local_wallet"
-  | "address_only"
 
 export type PaymentMethod = "bch"
 

@@ -315,14 +315,18 @@ export async function loadPasadaAccount(
   const savedWalletMode = String(
     wallet?.mode ?? wallet?.source ?? roleData?.walletMode ?? roleData?.walletSource ?? "",
   )
+  if (savedWalletMode === "address_only") {
+    throw new Error(
+      "This account has no PASADA wallet profile. Re-register with Paytaca or a new in-app wallet.",
+    )
+  }
   let walletMode: WalletMode =
     savedWalletMode === "paytaca_walletconnect" ||
-    savedWalletMode === "local_wallet" ||
-    savedWalletMode === "address_only"
+    savedWalletMode === "local_wallet"
       ? savedWalletMode
       : savedWalletMode === "generated"
         ? "local_wallet"
-        : "address_only"
+        : "paytaca_walletconnect"
   let bchPublicKey = String(wallet?.publicKey ?? roleData?.bchPublicKey ?? "")
   let walletConnectTopic = String(
     wallet?.walletConnectTopic ?? roleData?.walletConnectTopic ?? "",
