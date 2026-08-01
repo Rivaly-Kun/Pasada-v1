@@ -1,9 +1,16 @@
 import {
+  base64ToBin,
+  bigIntToCompactUint,
+  binToHex,
   decodeCashAddress,
   decodePrivateKeyWif,
   encodePrivateKeyWif,
   generatePrivateKey,
+  hash160,
+  hash256,
   privateKeyToP2pkhCashAddress,
+  secp256k1,
+  utf8ToBin,
 } from "@bitauth/libauth"
 
 export type GeneratedBchWallet = {
@@ -99,6 +106,100 @@ export function validatePrivateKeyForBchAddress(
   }
 
   return { valid: true, address: validatedAddress.address, privateKeyWif: key }
+}
+
+/** Derives the compressed public key for a local PASADA wallet without persisting it. */
+export function publicKeyForLocalBchWallet(
+  privateKeyWif: string,
+  address: string,
+): string {
+  const validated = validatePrivateKeyForBchAddress(privateKeyWif, address)
+  if (!validated.valid) throw new Error(validated.error)
+  const decoded = decodePrivateKeyWif(validated.privateKeyWif)
+  if (typeof decoded === "string") throw new Error("The local BCH key is invalid.")
+  const publicKey = secp256k1.derivePublicKeyCompressed(decoded.privateKey)
+  if (typeof publicKey === "string") throw new Error(publicKey)
+  return binToHex(publicKey)
+}
+
+/** Confirms that a compressed P2PKH public key belongs to the supplied address. */
+export function verifyPublicKeyForBchAddress(
+  publicKeyHex: string,
+  address: string,
+): string {
+  const validated = normalizeAndValidateBchAddress(address)
+  if (!validated.valid) throw new Error(validated.error)
+  const normalizedKey = publicKeyHex.trim().toLowerCase()
+  if (!/^(02|03)[0-9a-f]{64}$/.test(normalizedKey)) {
+    throw new Error("The BCH wallet did not provide a valid compressed public key.")
+  }
+  const decodedAddress = decodeCashAddress(validated.address)
+  if (typeof decodedAddress === "string") throw new Error("The BCH address is invalid.")
+  const publicKey = Uint8Array.from(
+    normalizedKey.match(/.{2}/g)!.map((value) => Number.parseInt(value, 16)),
+  )
+  const addressHash = decodedAddress.payload as Uint8Array
+  const publicKeyHash = hash160(publicKey)
+  if (
+    publicKeyHash.length !== addressHash.length ||
+    publicKeyHash.some((value, index) => value !== addressHash[index])
+  ) {
+    throw new Error("The BCH public key does not control the supplied address.")
+  }
+  return normalizedKey
+}
+
+export function createBchOwnershipChallenge(address: string): string {
+  const validated = normalizeAndValidateBchAddress(address)
+  if (!validated.valid) throw new Error(validated.error)
+  const nonce = crypto.getRandomValues(new Uint32Array(4))
+  const nonceText = Array.from(nonce)
+    .map((value) => value.toString(16).padStart(8, "0"))
+    .join("")
+  return [
+    "PASADA BCH wallet ownership verification",
+    `Address: ${validated.address}`,
+    `Nonce: ${nonceText}`,
+  ].join("\n")
+}
+
+/**
+ * Verifies the compact, recoverable Bitcoin Signed Message format emitted by
+ * Paytaca and other BCH wallets, then returns the verified public key.
+ */
+export function verifyBchAddressOwnershipSignature(
+  address: string,
+  message: string,
+  signatureBase64: string,
+): string {
+  const signature = base64ToBin(signatureBase64.trim())
+  if (signature.length !== 65) {
+    throw new Error("The wallet signature must be a 65-byte Bitcoin Signed Message value.")
+  }
+  const header = signature[0]
+  if (header < 27 || header > 34) {
+    throw new Error("The wallet signature has an unsupported recovery header.")
+  }
+  const recoveryId = (header - (header >= 31 ? 31 : 27)) as 0 | 1 | 2 | 3
+  const prefix = utf8ToBin("Bitcoin Signed Message:\n")
+  const messageBin = utf8ToBin(message)
+  const messageHash = hash256(
+    new Uint8Array([
+      ...bigIntToCompactUint(BigInt(prefix.length)),
+      ...prefix,
+      ...bigIntToCompactUint(BigInt(messageBin.length)),
+      ...messageBin,
+    ]),
+  )
+  const publicKey = secp256k1.recoverPublicKeyCompressed(
+    signature.slice(1),
+    recoveryId,
+    messageHash,
+  )
+  if (typeof publicKey === "string") {
+    throw new Error("The wallet signature could not be verified.")
+  }
+  return verifyPublicKeyForBchAddress(binToHex(publicKey), address)
 }
 
 // ─── Electrum Scripthash ──────────────────────────────────────────────────────

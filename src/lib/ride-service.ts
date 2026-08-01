@@ -18,7 +18,6 @@ import {
   fundEscrow,
   isEscrowFunded,
   prepareEscrowDescriptor,
-  publicKeyForAddress,
   refundEscrow,
   settleEscrow,
 } from "./bch-escrow"
@@ -70,9 +69,9 @@ function roleDatabase(role: AppRole): Database {
 }
 
 async function linkedWalletWif(
-  _db: Database,
+  db: Database,
   role: "passenger" | "driver",
-  _uid: string,
+  uid: string,
   address: string,
 ): Promise<string> {
   if (typeof window === "undefined") {
@@ -82,8 +81,22 @@ async function linkedWalletWif(
   const normalizedAddress = address.trim().toLowerCase()
   const localWif = localStorage.getItem(`pasada_wif_${normalizedAddress}`)
   if (!localWif) {
+    const wallet = (
+      await get(ref(db, `roleWallets/${role}/${uid}`))
+    ).val() as { mode?: string; source?: string } | null
+    const walletMode = wallet?.mode ?? wallet?.source
+    if (walletMode === "paytaca_walletconnect") {
+      throw new Error(
+        `This ${role} uses Paytaca through WalletConnect. BCH escrow requires an approved Paytaca transaction signature; PASADA never accepts its recovery phrase, WIF, or private key.`,
+      )
+    }
+    if (walletMode === "address_only") {
+      throw new Error(
+        `This ${role} linked an address for ownership verification only. Connect a signing wallet before using BCH escrow.`,
+      )
+    }
     throw new Error(
-      `Open the ${role} wallet in the browser where its BCH key was linked. Private keys are never read from Firebase.`,
+      `Open the ${role} wallet in the browser where its in-app BCH wallet was created. Private keys are never read from Firebase.`,
     )
   }
 
@@ -144,6 +157,7 @@ export async function setDriverPresence(
     rating: seed.rating,
     trips: current?.trips ?? seed.trips,
     bchAddress: account.bchAddress,
+    bchPublicKey: account.bchPublicKey,
     online,
     available: online && !current?.assignedRideId,
     assignedRideId: current?.assignedRideId ?? null,
@@ -271,19 +285,14 @@ export async function createRide(input: RideInput): Promise<string> {
   )
   const driverPayoutSats = transportationFareSats
   const requiredSats = fareSats + ESCROW_FUNDING_FEE_RESERVE_SATS * 2
-  let passengerPublicKey = ""
+  let passengerPublicKey = input.passenger.bchPublicKey
 
   if (!input.demoMode) {
-    const passengerWif = await linkedWalletWif(
-      db,
-      "passenger",
-      input.passenger.uid,
-      input.passenger.bchAddress,
-    )
-    passengerPublicKey = publicKeyForAddress(
-      passengerWif,
-      input.passenger.bchAddress,
-    )
+    if (!passengerPublicKey) {
+      throw new Error(
+        "This BCH address was linked before ownership verification. Reconnect or re-link the wallet to use BCH escrow.",
+      )
+    }
     let liveBalanceSats = Number(input.passenger.availableSats ?? 0)
     try {
       const { refreshPasadaWalletBalance } = await import("./auth")
@@ -393,6 +402,7 @@ async function prepareDemoDriver(
     rating: seed.rating,
     trips: seed.trips,
     bchAddress: account.bchAddress,
+    bchPublicKey: account.bchPublicKey,
     online: true,
     available: true,
     assignedRideId: null,
@@ -551,17 +561,17 @@ export async function acceptRide(
         "A driver and PASADA platform BCH address are required before funding escrow.",
       )
     }
-    const driverWif = await linkedWalletWif(
-      db,
-      "driver",
-      driverId,
-      driverAddress,
-    )
+    const driverPublicKey = ride.driver?.bchPublicKey ?? ""
+    if (!driverPublicKey) {
+      throw new Error(
+        "The driver's BCH address has not completed ownership verification.",
+      )
+    }
     const escrow = prepareEscrowDescriptor({
       passengerAddress: ride.passengerBchAddress,
       passengerPublicKey: ride.passengerPublicKey,
       driverAddress,
-      driverWif,
+      driverPublicKey,
       platformAddress,
       driverPayoutSats: ride.driverPayoutSats,
       platformFeeSats: ride.platformFeeSats,

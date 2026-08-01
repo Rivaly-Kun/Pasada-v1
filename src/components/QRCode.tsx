@@ -22,16 +22,19 @@ export default function QRCode({
   amountBch,
   size = 200,
   className = "",
+  raw = false,
 }: {
   value: string
   amountBch?: number
   size?: number
   className?: string
+  /** Render a non-BCH payload, e.g. a WalletConnect pairing URI. */
+  raw?: boolean
   showBchLogo?: boolean
 }) {
   const bchUri = useMemo(
-    () => formatBchUri(value, amountBch),
-    [value, amountBch],
+    () => (raw ? value.trim() : formatBchUri(value, amountBch)),
+    [value, amountBch, raw],
   )
   const [imageSrc, setImageSrc] = useState("")
 
@@ -70,7 +73,7 @@ export default function QRCode({
       {imageSrc ? (
         <img
           src={imageSrc}
-          alt={`BCH payment QR for ${bchUri}`}
+          alt={`${raw ? "WalletConnect" : "BCH payment"} QR for ${bchUri}`}
           width={size}
           height={size}
           className="block"

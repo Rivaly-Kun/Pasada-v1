@@ -1475,8 +1475,12 @@ function SettingsScreen({ account }: { account: PasadaAccount | null }) {
           {account?.bchAddress || "Connecting wallet..."}
         </p>
         <p className="mt-2 text-[11px] text-ink-300">
-          This public address is used to display your balance and receive BCH.
-          Your Paytaca keys remain inside Paytaca.
+          This public address is used to display your balance and receive BCH. {" "}
+          {account?.walletMode === "paytaca_walletconnect"
+            ? "Paytaca keys remain inside Paytaca."
+            : account?.walletMode === "local_wallet"
+              ? "The in-app wallet key remains in this browser only."
+              : "Address-only mode verifies ownership without collecting a private key."}
         </p>
       </div>
 

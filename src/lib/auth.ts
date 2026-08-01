@@ -13,22 +13,25 @@ import {
   fetchBchAddressInfo,
   generateBchWallet,
   normalizeAndValidateBchAddress,
+  publicKeyForLocalBchWallet,
   subscribeAddressToWatchtower,
   validatePrivateKeyForBchAddress,
+  verifyPublicKeyForBchAddress,
 } from "./bch-wallet"
 import { satoshisToCentavos } from "./fare"
 import { getScopedFirebase, type AppRole } from "./firebase"
-import type { PasadaAccount } from "./types"
+import type { PasadaAccount, WalletMode } from "./types"
 
-export type WalletSource = "existing" | "generated"
+export type WalletSource = WalletMode
 
 export type PasadaRegistration = {
   displayName: string
   email: string
   password: string
   bchAddress: string
-  walletSource: WalletSource
-  privateKeyWif?: string
+  walletMode: WalletMode
+  bchPublicKey: string
+  walletConnectTopic?: string
   plate?: string
   vehicleBody?: string
 }
@@ -106,13 +109,10 @@ export async function loginPasada(
 export async function registerPasada(role: AppRole, input: PasadaRegistration) {
   const validated = normalizeAndValidateBchAddress(input.bchAddress)
   if (!validated.valid) throw new Error(validated.error)
-  if (input.privateKeyWif) {
-    const validatedKey = validatePrivateKeyForBchAddress(
-      input.privateKeyWif,
-      validated.address,
-    )
-    if (!validatedKey.valid) throw new Error(validatedKey.error)
-  }
+  const bchPublicKey = verifyPublicKeyForBchAddress(
+    input.bchPublicKey,
+    validated.address,
+  )
   if (
     role === "driver" &&
     (!input.plate?.trim() || !input.vehicleBody?.trim())
@@ -183,7 +183,11 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       email,
       role,
       bchAddress: validated.address,
-      walletSource: input.walletSource,
+      walletMode: input.walletMode,
+      bchPublicKey,
+      ...(input.walletConnectTopic
+        ? { walletConnectTopic: input.walletConnectTopic }
+        : {}),
       ...(role === "driver"
         ? {
             plate: input.plate!.trim().toUpperCase(),
@@ -234,7 +238,12 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
         role,
         address: validated.address,
         network: "chipnet",
-        source: input.walletSource,
+        mode: input.walletMode,
+        source: input.walletMode,
+        publicKey: bchPublicKey,
+        ...(input.walletConnectTopic
+          ? { walletConnectTopic: input.walletConnectTopic }
+          : {}),
         chainSats: initialBalanceSats,
         createdAt: now,
         updatedAt: now,
@@ -303,12 +312,48 @@ export async function loadPasadaAccount(
     legacyBalance.val()) as Record<string, unknown> | null
   let address = String(wallet?.address ?? roleData?.bchAddress ?? "")
   let validated = normalizeAndValidateBchAddress(address)
+  const savedWalletMode = String(
+    wallet?.mode ?? wallet?.source ?? roleData?.walletMode ?? roleData?.walletSource ?? "",
+  )
+  let walletMode: WalletMode =
+    savedWalletMode === "paytaca_walletconnect" ||
+    savedWalletMode === "local_wallet" ||
+    savedWalletMode === "address_only"
+      ? savedWalletMode
+      : savedWalletMode === "generated"
+        ? "local_wallet"
+        : "address_only"
+  let bchPublicKey = String(wallet?.publicKey ?? roleData?.bchPublicKey ?? "")
+  let walletConnectTopic = String(
+    wallet?.walletConnectTopic ?? roleData?.walletConnectTopic ?? "",
+  )
+  let backfilledLocalPublicKey = false
+  if (
+    !bchPublicKey &&
+    walletMode === "local_wallet" &&
+    validated.valid &&
+    typeof window !== "undefined"
+  ) {
+    const localWif = localStorage.getItem(localWalletKey(validated.address))
+    if (localWif) {
+      try {
+        bchPublicKey = publicKeyForLocalBchWallet(localWif, validated.address)
+        backfilledLocalPublicKey = true
+      } catch {
+        // Leave legacy wallet data unchanged if its browser-local key is unavailable.
+      }
+    }
+  }
 
   // Auto-provision profile and Chipnet wallet if account exists in Auth but lacks database profile
   if (!roleData || !roles[role] || !validated.valid) {
     const now = Date.now()
     const autoWallet = generateBchWallet()
     const autoAddress = autoWallet.address
+    const autoPublicKey = publicKeyForLocalBchWallet(
+      autoWallet.privateKeyWif,
+      autoAddress,
+    )
     const displayName =
       firebaseUser.displayName ||
       (firebaseUser.email ? firebaseUser.email.split("@")[0] : "") ||
@@ -322,7 +367,8 @@ export async function loadPasadaAccount(
       email,
       role,
       bchAddress: autoAddress,
-      walletSource: "generated",
+      walletMode: "local_wallet" as const,
+      bchPublicKey: autoPublicKey,
       ...(role === "driver"
         ? {
             plate: "ORM-101",
@@ -349,7 +395,9 @@ export async function loadPasadaAccount(
         role,
         address: autoAddress,
         network: "chipnet",
-        source: "generated",
+        mode: "local_wallet",
+        source: "local_wallet",
+        publicKey: autoPublicKey,
         chainSats: 0,
         createdAt: now,
         updatedAt: now,
@@ -369,14 +417,32 @@ export async function loadPasadaAccount(
     roleData = profile
     address = autoAddress
     validated = { valid: true, address: autoAddress }
-  } else if (!walletSnapshot.exists() || !balanceSnapshot.exists()) {
+    bchPublicKey = autoPublicKey
+    walletConnectTopic = ""
+    walletMode = "local_wallet"
+  } else if (
+    !walletSnapshot.exists() ||
+    !balanceSnapshot.exists() ||
+    backfilledLocalPublicKey
+  ) {
     await update(ref(scoped.database), {
+      ...(backfilledLocalPublicKey
+        ? {
+            [`users/${firebaseUser.uid}/roleProfiles/${role}/bchPublicKey`]:
+              bchPublicKey,
+            [`${roleCollection}/${firebaseUser.uid}/bchPublicKey`]:
+              bchPublicKey,
+          }
+        : {}),
       [`roleWallets/${role}/${firebaseUser.uid}`]: {
         uid: firebaseUser.uid,
         role,
         address: validated.address,
         network: "chipnet",
-        source: String(wallet?.source ?? "existing"),
+        mode: walletMode,
+        source: walletMode,
+        publicKey: bchPublicKey,
+        ...(walletConnectTopic ? { walletConnectTopic } : {}),
         updatedAt: Date.now(),
       },
       [`roleAccounts/${role}/${firebaseUser.uid}/balance`]: {
@@ -404,6 +470,9 @@ export async function loadPasadaAccount(
       roleData?.displayName ?? firebaseUser.displayName ?? role,
     ),
     bchAddress: validated.address,
+    bchPublicKey,
+    walletMode,
+    ...(walletConnectTopic ? { walletConnectTopic } : {}),
     availableSats,
     availableCentavos: satoshisToCentavos(availableSats),
     authenticated: true,

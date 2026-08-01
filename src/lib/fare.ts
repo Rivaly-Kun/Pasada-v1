@@ -2,11 +2,12 @@ import type { FareBreakdown, FareConfig, FareInput, FareLine } from './types'
 
 /** All money in this module is integer centavos — never floats. */
 export const PESO = 100
-export const DEFAULT_PHP_PER_BCH_CENTAVOS = 32_450 * PESO
+// Matches the PHP estimate currently shown by Paytaca for Chipnet BCH.
+export const DEFAULT_PHP_PER_BCH_CENTAVOS = 12_749 * PESO
 
 export const DEFAULT_FARE_CONFIG: FareConfig = {
-  version: 'v3',
-  effective: '2026-06-01',
+  version: 'v5',
+  effective: '2026-08-02',
   seatCapacity: 6,
   baseDistanceKm: 2.5,
   baseFarePerSeat: 10 * PESO,

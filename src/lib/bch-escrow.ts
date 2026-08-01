@@ -43,7 +43,7 @@ type EscrowParticipants = {
   passengerAddress: string
   passengerPublicKey: string
   driverAddress: string
-  driverWif: string
+  driverPublicKey: string
   platformAddress: string
   driverPayoutSats: number
   platformFeeSats: number
@@ -171,10 +171,6 @@ export function prepareEscrowDescriptor(
     )
   }
 
-  const driverSigner = signerForAddress(
-    participants.driverWif,
-    participants.driverAddress,
-  )
   const descriptor: EscrowDescriptor = {
     contractAddress: "",
     network,
@@ -185,7 +181,10 @@ export function prepareEscrowDescriptor(
       participants.passengerPublicKey,
       participants.passengerAddress,
     ),
-    driverPublicKey: binToHex(driverSigner.getPublicKey()),
+    driverPublicKey: verifiedPublicKeyForAddress(
+      participants.driverPublicKey,
+      participants.driverAddress,
+    ),
     passengerPkh: publicKeyHash(participants.passengerAddress),
     driverPkh: publicKeyHash(participants.driverAddress),
     platformPkh: publicKeyHash(participants.platformAddress),

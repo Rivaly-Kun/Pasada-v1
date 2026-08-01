@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { PhoneFrame } from "./PhoneFrame"
+import QRCode from "./QRCode"
 import { Button } from "./ui"
 import {
   friendlyAuthError,
@@ -9,15 +10,22 @@ import {
   logoutPasada,
   observePasadaAuth,
   registerPasada,
-  type WalletSource,
 } from "../lib/auth"
 import {
+  createBchOwnershipChallenge,
   generateBchWallet,
   normalizeAndValidateBchAddress,
+  publicKeyForLocalBchWallet,
   type GeneratedBchWallet,
+  verifyBchAddressOwnershipSignature,
 } from "../lib/bch-wallet"
+import {
+  connectPaytacaWallet,
+  requestPaytacaMessageSignature,
+  type PaytacaWalletConnection,
+} from "../lib/paytaca-walletconnect"
 import type { AppRole } from "../lib/firebase"
-import type { PasadaAccount } from "../lib/types"
+import type { PasadaAccount, WalletMode } from "../lib/types"
 
 export default function RoleAuthGate({
   role,
@@ -30,6 +38,7 @@ export default function RoleAuthGate({
   const [initialized, setInitialized] = useState(false)
   const [sessionError, setSessionError] = useState("")
   const [sessionEmail, setSessionEmail] = useState("")
+  const registrationInProgress = useRef(false)
 
   useEffect(
     () =>
@@ -37,6 +46,14 @@ export default function RoleAuthGate({
         setAccount(null)
         if (!user) {
           setInitialized(true)
+          return
+        }
+        // Firebase emits an authenticated user as soon as its email/password
+        // account is created. Wait for registration to save the verified wallet
+        // profile before loading it, otherwise legacy auto-provisioning can
+        // briefly supply a different local address to the app UI.
+        if (registrationInProgress.current) {
+          setInitialized(false)
           return
         }
         setSessionError("")
@@ -75,6 +92,13 @@ export default function RoleAuthGate({
         initialError={sessionError}
         initialEmail={sessionEmail}
         completeProfile={sessionError.includes("has no PASADA")}
+        onRegistrationStateChange={(inProgress) => {
+          registrationInProgress.current = inProgress
+        }}
+        onRegistrationComplete={async () => {
+          setAccount(await loadPasadaAccount(role))
+          setInitialized(true)
+        }}
       />
     )
   }
@@ -86,11 +110,15 @@ function RoleLoginPanel({
   initialError,
   initialEmail,
   completeProfile,
+  onRegistrationStateChange,
+  onRegistrationComplete,
 }: {
   role: AppRole
   initialError: string
   initialEmail: string
   completeProfile: boolean
+  onRegistrationStateChange: (inProgress: boolean) => void
+  onRegistrationComplete: () => Promise<void>
 }) {
   const [mode, setMode] = useState<"login" | "register">(
     completeProfile ? "register" : "login",
@@ -100,14 +128,23 @@ function RoleLoginPanel({
   const [password, setPassword] = useState("")
   const [plate, setPlate] = useState("")
   const [vehicleBody, setVehicleBody] = useState("")
-  const [walletSource, setWalletSource] = useState<WalletSource>("existing")
+  const [walletMode, setWalletMode] =
+    useState<WalletMode>("paytaca_walletconnect")
   const [existingAddress, setExistingAddress] = useState("")
-  const [existingPrivateKeyWif, setExistingPrivateKeyWif] = useState("")
+  const [addressChallenge, setAddressChallenge] = useState("")
+  const [addressSignature, setAddressSignature] = useState("")
+  const [addressPublicKey, setAddressPublicKey] = useState("")
+  const [addressProofMessage, setAddressProofMessage] = useState("")
+  const [paytacaConnection, setPaytacaConnection] =
+    useState<PaytacaWalletConnection | null>(null)
+  const [paytacaUri, setPaytacaUri] = useState("")
+  const [paytacaPublicKey, setPaytacaPublicKey] = useState("")
   const [generatedWallet, setGeneratedWallet] =
     useState<GeneratedBchWallet | null>(null)
   const [recoverySaved, setRecoverySaved] = useState(false)
   const [copied, setCopied] = useState<"address" | "key" | null>(null)
   const [loading, setLoading] = useState(false)
+  const [walletLoading, setWalletLoading] = useState(false)
   const [error, setError] = useState(initialError)
 
   const addressValidation = useMemo(
@@ -115,16 +152,74 @@ function RoleLoginPanel({
     [existingAddress],
   )
   const roleLabel = role === "passenger" ? "Passenger" : "Driver"
+  const walletReady =
+    walletMode === "paytaca_walletconnect"
+      ? Boolean(paytacaConnection && paytacaPublicKey)
+      : walletMode === "local_wallet"
+        ? Boolean(generatedWallet && recoverySaved)
+        : Boolean(addressValidation.valid && addressChallenge && addressPublicKey)
   const registrationReady =
     displayName.trim().length > 1 &&
     email.trim().length > 3 &&
     password.length >= 6 &&
     (role !== "driver" ||
       (plate.trim().length > 2 && vehicleBody.trim().length > 2)) &&
-    (walletSource === "existing"
-      ? addressValidation.valid &&
-        (role !== "driver" || existingPrivateKeyWif.trim().length > 0)
-      : Boolean(generatedWallet && recoverySaved))
+    walletReady
+
+  const startPaytacaConnection = async () => {
+    setWalletLoading(true)
+    setError("")
+    setPaytacaConnection(null)
+    setPaytacaPublicKey("")
+    setPaytacaUri("")
+    try {
+      const connection = await connectPaytacaWallet(setPaytacaUri)
+      const challenge = createBchOwnershipChallenge(connection.address)
+      const signature = await requestPaytacaMessageSignature(connection, challenge)
+      const publicKey = verifyBchAddressOwnershipSignature(
+        connection.address,
+        challenge,
+        signature,
+      )
+      setPaytacaConnection(connection)
+      setPaytacaPublicKey(publicKey)
+      setPaytacaUri("")
+    } catch (cause) {
+      setPaytacaUri("")
+      setError(friendlyAuthError(cause))
+    } finally {
+      setWalletLoading(false)
+    }
+  }
+
+  const createAddressChallenge = () => {
+    if (!addressValidation.valid) {
+      setAddressProofMessage(addressValidation.error)
+      return
+    }
+    setAddressChallenge(createBchOwnershipChallenge(addressValidation.address))
+    setAddressSignature("")
+    setAddressPublicKey("")
+    setAddressProofMessage("")
+  }
+
+  const verifyAddressOwnership = () => {
+    try {
+      if (!addressChallenge) {
+        throw new Error("Create a fresh ownership challenge first.")
+      }
+      const publicKey = verifyBchAddressOwnershipSignature(
+        existingAddress,
+        addressChallenge,
+        addressSignature,
+      )
+      setAddressPublicKey(publicKey)
+      setAddressProofMessage("Address ownership verified. No wallet secret was shared.")
+    } catch (cause) {
+      setAddressPublicKey("")
+      setAddressProofMessage(friendlyAuthError(cause))
+    }
+  }
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -133,28 +228,49 @@ function RoleLoginPanel({
     try {
       if (mode === "login") {
         await loginPasada(role, email, password)
-      } else {
-        const address =
-          walletSource === "existing"
-            ? existingAddress
-            : (generatedWallet?.address ?? "")
-        const privateKeyWif =
-          walletSource === "existing"
-            ? role === "driver"
-              ? existingPrivateKeyWif
-              : undefined
-            : (generatedWallet?.privateKeyWif ?? "")
-        if (privateKeyWif) linkPasadaWalletSigningKey(address, privateKeyWif)
+        return
+      }
+
+      const address =
+        walletMode === "paytaca_walletconnect"
+          ? (paytacaConnection?.address ?? "")
+          : walletMode === "local_wallet"
+            ? (generatedWallet?.address ?? "")
+            : existingAddress
+      const bchPublicKey =
+        walletMode === "paytaca_walletconnect"
+          ? paytacaPublicKey
+          : walletMode === "local_wallet"
+            ? publicKeyForLocalBchWallet(
+                generatedWallet?.privateKeyWif ?? "",
+                generatedWallet?.address ?? "",
+              )
+            : addressPublicKey
+
+      if (walletMode === "local_wallet" && generatedWallet) {
+        linkPasadaWalletSigningKey(
+          generatedWallet.address,
+          generatedWallet.privateKeyWif,
+        )
+      }
+      onRegistrationStateChange(true)
+      try {
         await registerPasada(role, {
           displayName,
           email,
           password,
           bchAddress: address,
-          walletSource,
-          privateKeyWif,
+          walletMode,
+          bchPublicKey,
+          ...(walletMode === "paytaca_walletconnect" && paytacaConnection
+            ? { walletConnectTopic: paytacaConnection.topic }
+            : {}),
           plate,
           vehicleBody,
         })
+        await onRegistrationComplete()
+      } finally {
+        onRegistrationStateChange(false)
       }
     } catch (cause) {
       setError(friendlyAuthError(cause))
@@ -185,7 +301,7 @@ function RoleLoginPanel({
             : `Create ${roleLabel.toLowerCase()} account`}
         </h1>
         <p className="mt-2 text-[12px] leading-relaxed text-white/55">
-          This session is independent from the{" "}
+          This session is independent from the {" "}
           {role === "passenger" ? "driver" : "passenger"} app.
         </p>
 
@@ -210,9 +326,7 @@ function RoleLoginPanel({
             value={password}
             onChange={setPassword}
             type="password"
-            autoComplete={
-              mode === "login" ? "current-password" : "new-password"
-            }
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
             minLength={6}
           />
 
@@ -240,65 +354,133 @@ function RoleLoginPanel({
               <p className="font-mono text-[9px] tracking-[0.14em] text-white/45 uppercase">
                 BCH wallet
               </p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="mt-2 grid grid-cols-3 gap-2">
                 <WalletChoice
-                  active={walletSource === "existing"}
-                  onClick={() => setWalletSource("existing")}
-                  title="Use my address"
-                  detail="Paytaca or another BCH wallet"
+                  active={walletMode === "paytaca_walletconnect"}
+                  onClick={() => setWalletMode("paytaca_walletconnect")}
+                  title="Connect Paytaca"
+                  detail="WalletConnect"
                 />
                 <WalletChoice
-                  active={walletSource === "generated"}
-                  onClick={() => setWalletSource("generated")}
-                  title="Create one"
-                  detail="New PASADA BCH address"
+                  active={walletMode === "local_wallet"}
+                  onClick={() => setWalletMode("local_wallet")}
+                  title="Create wallet"
+                  detail="In this browser"
+                />
+                <WalletChoice
+                  active={walletMode === "address_only"}
+                  onClick={() => setWalletMode("address_only")}
+                  title="Link address"
+                  detail="Proof required"
                 />
               </div>
 
-              {walletSource === "existing" ? (
-                <div className="mt-3">
+              {walletMode === "paytaca_walletconnect" ? (
+                <div className="mt-3 space-y-3">
+                  {paytacaUri ? (
+                    <div className="flex flex-col items-center gap-3 rounded-xl bg-white/8 p-3 text-center">
+                      <QRCode value={paytacaUri} raw size={164} />
+                      <p className="text-[10px] leading-relaxed text-white/60">
+                        Scan with Paytaca, approve the BCH Chipnet connection,
+                        then approve the ownership message.
+                      </p>
+                    </div>
+                  ) : paytacaConnection ? (
+                    <p className="rounded-xl bg-emerald-500/15 p-3 text-[11px] break-all text-emerald-200">
+                      Paytaca address verified: {paytacaConnection.address}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] leading-relaxed text-white/55">
+                      Connect directly to Paytaca through WalletConnect. PASADA
+                      never asks for or receives a recovery phrase, WIF, or
+                      private key.
+                    </p>
+                  )}
+                  <Button
+                    full
+                    variant="blue"
+                    disabled={walletLoading}
+                    onClick={() => void startPaytacaConnection()}
+                  >
+                    {walletLoading
+                      ? "Waiting for Paytaca..."
+                      : paytacaConnection
+                        ? "Reconnect Paytaca"
+                        : "Connect Paytaca"}
+                  </Button>
+                </div>
+              ) : walletMode === "address_only" ? (
+                <div className="mt-3 space-y-3">
                   <AuthField
                     label="Bitcoin Cash address"
                     value={existingAddress}
-                    onChange={setExistingAddress}
+                    onChange={(value) => {
+                      setExistingAddress(value)
+                      setAddressChallenge("")
+                      setAddressSignature("")
+                      setAddressPublicKey("")
+                      setAddressProofMessage("")
+                    }}
                     autoComplete="off"
                     placeholder="bchtest:q..."
                   />
                   {existingAddress && (
                     <p
-                      className={`mt-1.5 text-[10px] ${
+                      className={`text-[10px] ${
                         addressValidation.valid
                           ? "text-emerald-300"
                           : "text-pasada-red"
                       }`}
                     >
                       {addressValidation.valid
-                        ? "Valid BCH chipnet address and checksum."
+                        ? "Valid BCH address. Prove ownership before registering."
                         : addressValidation.error}
                     </p>
                   )}
-                  {role === "driver" ? (
-                    <div className="mt-3">
-                      <AuthField
-                        label="Private key (WIF)"
-                        value={existingPrivateKeyWif}
-                        onChange={setExistingPrivateKeyWif}
-                        type="password"
-                        autoComplete="off"
-                        placeholder="c... or L..."
-                      />
-                      <p className="mt-1.5 text-[10px] leading-relaxed text-white/45">
-                        Required to sign BCH escrow. It is checked against this
-                        address and kept in this browser only — never send a
-                        seed phrase.
+                  <button
+                    type="button"
+                    onClick={createAddressChallenge}
+                    disabled={!addressValidation.valid}
+                    className="w-full rounded-xl border border-white/15 py-2.5 text-[11px] font-bold disabled:opacity-35"
+                  >
+                    Create ownership challenge
+                  </button>
+                  {addressChallenge && (
+                    <>
+                      <p className="rounded-xl bg-white/8 p-3 font-mono text-[9px] break-all whitespace-pre-wrap text-white/75">
+                        {addressChallenge}
                       </p>
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-[10px] leading-relaxed text-white/45">
-                      This public Paytaca address is saved to PASADA. Your
-                      private key stays in Paytaca and is never requested here.
+                      <AuthField
+                        label="Signed message"
+                        value={addressSignature}
+                        onChange={setAddressSignature}
+                        autoComplete="off"
+                        placeholder="Base64 wallet signature"
+                      />
+                      <button
+                        type="button"
+                        onClick={verifyAddressOwnership}
+                        disabled={!addressSignature.trim()}
+                        className="w-full rounded-xl border border-pasada-blue/50 py-2.5 text-[11px] font-bold text-pasada-blue disabled:opacity-35"
+                      >
+                        Verify ownership
+                      </button>
+                    </>
+                  )}
+                  {addressProofMessage && (
+                    <p
+                      className={`text-[10px] leading-relaxed ${
+                        addressPublicKey ? "text-emerald-300" : "text-pasada-red"
+                      }`}
+                    >
+                      {addressProofMessage}
                     </p>
                   )}
+                  <p className="text-[10px] leading-relaxed text-white/45">
+                    Link a BCH address from any wallet that supports Bitcoin
+                    Signed Message. A signature proves control; it never
+                    exposes your private key.
+                  </p>
                 </div>
               ) : generatedWallet ? (
                 <div className="mt-3 space-y-2.5">
@@ -312,22 +494,18 @@ function RoleLoginPanel({
                     label="Private key — shown only now"
                     value={generatedWallet.privateKeyWif}
                     copied={copied === "key"}
-                    onCopy={() =>
-                      void copy("key", generatedWallet.privateKeyWif)
-                    }
+                    onCopy={() => void copy("key", generatedWallet.privateKeyWif)}
                     danger
                   />
                   <label className="flex items-start gap-2 text-[11px] leading-relaxed text-white/65">
                     <input
                       type="checkbox"
                       checked={recoverySaved}
-                      onChange={(event) =>
-                        setRecoverySaved(event.target.checked)
-                      }
+                      onChange={(event) => setRecoverySaved(event.target.checked)}
                       className="mt-0.5"
                     />
-                    I saved the private key. PASADA stores the key in this
-                    browser only; Firebase receives only my public BCH address.
+                    I saved the private key. This new wallet stays in this
+                    browser; Firebase receives only public wallet data.
                   </label>
                 </div>
               ) : (
@@ -435,8 +613,8 @@ function WalletChoice({
         active ? "border-pasada-blue bg-pasada-blue/15" : "border-white/10"
       }`}
     >
-      <span className="block font-display text-[11px] font-bold">{title}</span>
-      <span className="mt-0.5 block text-[9px] leading-tight text-white/45">
+      <span className="block font-display text-[10px] font-bold">{title}</span>
+      <span className="mt-0.5 block text-[8px] leading-tight text-white/45">
         {detail}
       </span>
     </button>
@@ -457,18 +635,12 @@ function RecoveryValue({
   danger?: boolean
 }) {
   return (
-    <div
-      className={`rounded-xl p-3 ${danger ? "bg-pasada-red/15" : "bg-white/8"}`}
-    >
+    <div className={`rounded-xl p-3 ${danger ? "bg-pasada-red/15" : "bg-white/8"}`}>
       <div className="flex items-center justify-between gap-2">
         <p className="font-mono text-[8px] tracking-[0.12em] text-white/45 uppercase">
           {label}
         </p>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="text-[9px] font-bold text-white/70"
-        >
+        <button type="button" onClick={onCopy} className="text-[9px] font-bold text-white/70">
           {copied ? "Copied" : "Copy"}
         </button>
       </div>

@@ -1,5 +1,10 @@
 export type Role = "passenger" | "driver" | "admin"
 
+export type WalletMode =
+  | "paytaca_walletconnect"
+  | "local_wallet"
+  | "address_only"
+
 export type PaymentMethod = "bch"
 
 export type DiscountClass = "senior" | "pwd" | "student"
@@ -90,6 +95,9 @@ export interface PasadaAccount {
   role: "passenger" | "driver"
   displayName: string
   bchAddress: string
+  bchPublicKey: string
+  walletMode: WalletMode
+  walletConnectTopic?: string
   availableCentavos: number
   availableSats: number
   authenticated: boolean
@@ -107,6 +115,7 @@ export interface LiveDriver {
   rating: number
   trips: number
   bchAddress: string
+  bchPublicKey: string
   online: boolean
   available: boolean
   assignedRideId: string | null
