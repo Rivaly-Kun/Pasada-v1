@@ -11,6 +11,7 @@ import {
   satoshisToCentavos,
   settlementOutputs,
 } from "../../lib/fare"
+import { useBchPhpQuote } from "../../lib/bch-price"
 import { logoutPasada, refreshPasadaWalletBalance } from "../../lib/auth"
 import { landmarkByName, type Point } from "../../lib/geo"
 import { getScopedFirebase } from "../../lib/firebase"
@@ -63,6 +64,7 @@ export default function DriverApp({
   const [liveRide, setLiveRide] = useState<LiveRide | null>(null)
   const [rideHistory, setRideHistory] = useState<LiveRide[]>([])
   const [earningsSats, setEarningsSats] = useState(account.availableSats)
+  const bchPhpQuote = useBchPhpQuote(fareConfig.phpPerBchCentavos)
   const [serviceError, setServiceError] = useState("")
   const [acceptingRide, setAcceptingRide] = useState(false)
   const [walletMessage, setWalletMessage] = useState("")
@@ -353,7 +355,7 @@ export default function DriverApp({
                 {[
                   [
                     "Wallet",
-                    formatPeso(satoshisToCentavos(earningsSats, fareConfig)),
+                    formatPeso(satoshisToCentavos(earningsSats, bchPhpQuote)),
                   ],
                   ["Trips", String(driverRecord?.trips ?? driver.trips)],
                   ["Rating", String(driver.rating)],
@@ -798,7 +800,8 @@ export default function DriverApp({
           balanceSats={earningsSats}
           account={account}
           rides={rideHistory}
-          fareConfig={fareConfig}
+          phpPerBchCentavos={bchPhpQuote.phpPerBchCentavos}
+          quoteSource={bchPhpQuote.source}
           walletMessage={walletMessage}
           onSync={() => void syncWallet()}
         />
@@ -874,19 +877,23 @@ function DriverPay({
   balanceSats,
   account,
   rides,
-  fareConfig,
+  phpPerBchCentavos,
+  quoteSource,
   walletMessage = "",
   onSync,
 }: {
   balanceSats: number
   account: PasadaAccount
   rides: LiveRide[]
-  fareConfig: FareConfig
+  phpPerBchCentavos: number
+  quoteSource: "CoinGecko" | "Configured fallback"
   walletMessage?: string
   onSync: () => void
 }) {
   const settled = rides.filter((ride) => ride.status === "settled")
-  const balanceCentavos = satoshisToCentavos(balanceSats, fareConfig)
+  const balanceCentavos = satoshisToCentavos(balanceSats, {
+    phpPerBchCentavos,
+  })
   return (
     <div className="scroll-quiet h-full overflow-y-auto bg-ink-50 px-5 pt-14 pb-28">
       <h1 className="font-display text-[26px] font-extrabold">
@@ -901,6 +908,11 @@ function DriverPay({
             </p>
             <p className="num mt-2 text-[34px] leading-none font-medium">
               {formatPeso(balanceCentavos)}
+            </p>
+            <p className="mt-1 text-[9px] text-white/35">
+              {quoteSource === "CoinGecko"
+                ? "Live PHP estimate"
+                : "Configured PHP estimate"}
             </p>
             <p className="num mt-1.5 text-[11px] text-white/50">
               {formatBchFromSats(balanceSats)} BCH ·{" "}

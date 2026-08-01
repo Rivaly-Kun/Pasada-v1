@@ -20,6 +20,7 @@ import {
   satoshisToCentavos,
   toSatoshis,
 } from "../../lib/fare"
+import { useBchPhpQuote } from "../../lib/bch-price"
 import {
   ROBINSONS_PLACE_ORMOC,
   SM_CENTER_ORMOC,
@@ -71,6 +72,7 @@ export default function PassengerApp({
   const [tab, setTab] = useState("home")
   const [status, setStatus] = useState<RideStatus>("idle")
   const [balanceSats, setBalanceSats] = useState(account.availableSats)
+  const bchPhpQuote = useBchPhpQuote(fareConfig.phpPerBchCentavos)
   const [rideId, setRideId] = useState<string | null>(null)
   const [liveRide, setLiveRide] = useState<LiveRide | null>(null)
   const [rideHistory, setRideHistory] = useState<LiveRide[]>([])
@@ -124,7 +126,7 @@ export default function PassengerApp({
     ],
   )
 
-  const balance = satoshisToCentavos(balanceSats, activeConfig)
+  const balance = satoshisToCentavos(balanceSats, bchPhpQuote)
 
   const selectPickup = (name: string) => {
     setFrom(name)
@@ -358,7 +360,8 @@ export default function PassengerApp({
         <HomeScreen
           balanceSats={balanceSats}
           account={account}
-          fareConfig={fareConfig}
+          balance={balance}
+          quoteSource={bchPhpQuote.source}
           walletMessage={walletMessage}
           onSync={() => void syncWallet()}
           onBook={() => {
@@ -441,6 +444,7 @@ export default function PassengerApp({
           balance={balance}
           balanceSats={balanceSats}
           address={account.bchAddress}
+          quoteSource={bchPhpQuote.source}
           walletMessage={walletMessage}
           onSync={() => void syncWallet()}
         />
@@ -463,15 +467,17 @@ export default function PassengerApp({
 
 function HomeScreen({
   balanceSats,
+  balance,
   account,
-  fareConfig,
+  quoteSource,
   walletMessage,
   onSync,
   onBook,
 }: {
   balanceSats: number
+  balance: number
   account: PasadaAccount | null
-  fareConfig: FareConfig
+  quoteSource: "CoinGecko" | "Configured fallback"
   walletMessage: string
   onSync: () => void
   onBook: () => void
@@ -512,7 +518,12 @@ function HomeScreen({
                 PASADA BCH balance
               </p>
               <p className="num mt-2 text-[34px] leading-none font-medium">
-                {formatPeso(satoshisToCentavos(balanceSats, fareConfig))}
+                {formatPeso(balance)}
+              </p>
+              <p className="mt-1 text-[9px] text-white/35">
+                {quoteSource === "CoinGecko"
+                  ? "Live PHP estimate"
+                  : "Configured PHP estimate"}
               </p>
               <p className="num mt-1.5 text-[11px] text-white/50">
                 {formatBchFromSats(balanceSats)} BCH Â·{" "}
@@ -1308,12 +1319,14 @@ function PayScreen({
   balance,
   balanceSats,
   address,
+  quoteSource,
   walletMessage,
   onSync,
 }: {
   balance: number
   balanceSats: number
   address: string
+  quoteSource: "CoinGecko" | "Configured fallback"
   walletMessage: string
   onSync: () => void
 }) {
@@ -1333,6 +1346,11 @@ function PayScreen({
           Available
         </p>
         <p className="num mt-2 text-3xl font-medium">{formatPeso(balance)}</p>
+        <p className="mt-1 text-[9px] text-white/35">
+          {quoteSource === "CoinGecko"
+            ? "Live PHP estimate"
+            : "Configured PHP estimate"}
+        </p>
         <p className="num mt-1 text-[11px] text-white/50">
           {formatBchFromSats(balanceSats)} BCH Â· {balanceSats.toLocaleString()}{" "}
           sats
