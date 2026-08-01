@@ -40,7 +40,6 @@ import { ESCROW_FUNDING_FEE_RESERVE_SATS } from "../../lib/bch-escrow"
 import {
   cancelRide,
   createRide,
-  fundRideEscrow,
   submitDriverRating,
   subscribeAccountBalance,
   subscribeRide,
@@ -208,37 +207,6 @@ export default function PassengerApp({
       setStatus(ride.status)
     })
   }, [rideId])
-
-  useEffect(() => {
-    if (
-      !rideId ||
-      !liveRide ||
-      liveRide.demoMode ||
-      liveRide.status !== "funding" ||
-      liveRide.paymentStatus !== "funding" ||
-      !liveRide.escrow
-    )
-      return
-    let cancelled = false
-    void fundRideEscrow(account.uid, rideId).catch((error) => {
-      if (!cancelled) {
-        setServiceError(
-          error instanceof Error
-            ? error.message
-            : "The BCH escrow could not be funded.",
-        )
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [
-    account.uid,
-    rideId,
-    liveRide?.status,
-    liveRide?.paymentStatus,
-    liveRide?.escrow?.contractAddress,
-  ])
 
   const startRideRequest = async () => {
     setServiceError("")

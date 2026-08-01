@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import AdminApp from "./apps/admin/AdminApp"
 import DriverApp from "./apps/driver/DriverApp"
 import PassengerApp from "./apps/passenger/PassengerApp"
+import EscrowFundingCoordinator from "./components/EscrowFundingCoordinator"
 import RoleAuthGate from "./components/RoleAuthGate"
 import { DEFAULT_FARE_CONFIG } from "./lib/fare"
 import {
@@ -47,6 +48,7 @@ function PasadaDashboard() {
 
   return (
     <div className="min-h-screen bg-ink-50">
+      <EscrowFundingCoordinator />
       <header className="sticky top-0 z-50 border-b border-ink-100 bg-white/85 backdrop-blur">
         <div className="mx-auto flex max-w-[1240px] flex-wrap items-center gap-x-6 gap-y-3 px-5 py-3">
           <div className="flex items-baseline gap-2.5">

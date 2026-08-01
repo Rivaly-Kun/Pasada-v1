@@ -16,7 +16,7 @@ import {
   EscrowBroadcastPendingError,
   ESCROW_FUNDING_FEE_RESERVE_SATS,
   fundEscrow,
-  isEscrowFunded,
+  getEscrowFundingTxid,
   prepareEscrowDescriptor,
   refundEscrow,
   settleEscrow,
@@ -41,6 +41,32 @@ type DriverSeed = {
 
 const DRIVER_HEARTBEAT_TIMEOUT_MS = 30_000
 const DRIVER_REOFFER_COOLDOWN_MS = 30_000
+function isFirebaseMaxRetry(error: unknown): boolean {
+  return error instanceof Error && error.message.toLowerCase() === "maxretry"
+}
+/**
+ * Realtime Database occasionally drops a transaction acknowledgement while a
+ * driver heartbeat is updating. Retrying the same guarded transaction is safe
+ * and avoids exposing Firebase's internal `maxretry` error in the demo UI.
+ */
+async function retryFirebaseTransaction<T>(
+  operation: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      if (!isFirebaseMaxRetry(error) || attempt === attempts - 1) throw error
+      await delay(300 * (attempt + 1))
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Unable to synchronize the ride state.")
+}
 
 type RideInput = {
   passenger: PasadaAccount
@@ -197,7 +223,7 @@ export async function updateDriverLocation(
     if (
       ride &&
       ride.driverId === driverId &&
-      !["settled", "cancelled"].includes(ride.status)
+      !["funding", "settled", "cancelled"].includes(ride.status)
     ) {
       writes[`rides/${ride.id}/driver/location`] = location
       writes[`rides/${ride.id}/updatedAt`] = now
@@ -438,36 +464,54 @@ export async function acceptRide(
 ): Promise<boolean> {
   const db = roleDatabase("driver")
   const now = Date.now()
-  const driverClaim = await runTransaction(
-    ref(db, `drivers/${driverId}`),
-    (driver: LiveDriver | null) => {
-      if (
-        !driver?.online ||
-        (driver.assignedRideId && driver.assignedRideId !== rideId)
-      )
-        return
-      return {
-        ...driver,
-        available: false,
-        assignedRideId: rideId,
-        updatedAt: now,
-      }
-    },
-  )
-  if (!driverClaim.committed) {
-    const currentDriver = driverClaim.snapshot.val() as LiveDriver | null
-    if (!currentDriver?.online) {
-      throw new Error("Your driver radar is offline. Go online and try again.")
-    }
+  const driverRef = ref(db, `drivers/${driverId}`)
+  const currentDriverSnapshot = await get(driverRef)
+  const currentDriver = currentDriverSnapshot.exists()
+    ? currentDriverSnapshot.val() as LiveDriver
+    : null
+  if (!currentDriver?.online) {
+    throw new Error("Your driver radar is offline. Go online and try again.")
+  }
+  if (currentDriver.assignedRideId && currentDriver.assignedRideId !== rideId) {
     throw new Error(
       "This driver is already assigned to another ride. Finish or cancel it first.",
     )
   }
-  const claimedDriver = driverClaim.snapshot.val() as LiveDriver
+  // Dispatch already reserves the driver before showing the request. Avoid a
+  // second, competing transaction with the heartbeat in the normal accept path.
+  let claimedDriver = currentDriver
+  if (currentDriver.assignedRideId !== rideId) {
+    const driverClaim = await retryFirebaseTransaction(() =>
+      runTransaction(driverRef, (driver: LiveDriver | null) => {
+        if (
+          !driver?.online ||
+          (driver.assignedRideId && driver.assignedRideId !== rideId)
+        )
+          return
+        return {
+          ...driver,
+          available: false,
+          assignedRideId: rideId,
+          updatedAt: now,
+        }
+      }),
+    )
+    if (!driverClaim.committed) {
+      const latestDriver = driverClaim.snapshot.val() as LiveDriver | null
+      if (!latestDriver?.online) {
+        throw new Error(
+          "Your driver radar is offline. Go online and try again.",
+        )
+      }
+      throw new Error(
+        "This driver is already assigned to another ride. Finish or cancel it first.",
+      )
+    }
+    claimedDriver = (driverClaim.snapshot.val() as LiveDriver)
+  }
+  const reservation = await retryFirebaseTransaction(() =>
+    runTransaction(ref(db, `rides/${rideId}`), (ride: LiveRide | null) => {
 
-  const reservation = await runTransaction(
-    ref(db, `rides/${rideId}`),
-    (ride: LiveRide | null) => {
       const retryingFailedFunding =
         ride?.status === "funding" && ride.paymentStatus === "failed"
       if (
@@ -488,8 +532,9 @@ export async function acceptRide(
         paymentStatus: "funding",
         updatedAt: now,
       }
-    },
+    }),
   )
+  let ride: LiveRide
   if (!reservation.committed) {
     const latestSnapshot = await get(ref(db, `rides/${rideId}`))
     const latestRide = latestSnapshot.exists()
@@ -513,12 +558,30 @@ export async function acceptRide(
     if (latestRide.driverId && latestRide.driverId !== driverId) {
       throw new Error("This booking was assigned to another driver.")
     }
-    if (latestRide.status === "funding") {
-      throw new Error("BCH escrow preparation is already in progress.")
+    if (
+      latestRide.status === "funding" &&
+      (latestRide.escrow ||
+        latestRide.paymentStatus === "funding_broadcasting")
+    ) {
+      // The accepted transaction may have reached Firebase just before this
+      // client lost its acknowledgement. It is already being funded.
+      return true
     }
-    throw new Error("This booking is no longer open for acceptance.")
+    if (
+      latestRide.status === "funding" &&
+      latestRide.paymentStatus === "funding"
+    ) {
+      // Resume after an acknowledgement loss so the contract descriptor is
+      // still written without requiring a refresh.
+      ride = latestRide
+    } else if (latestRide.status === "funding") {
+      throw new Error("BCH escrow preparation is already in progress.")
+    } else {
+      throw new Error("This booking is no longer open for acceptance.")
+    }
+  } else {
+    ride = normalizeRide(reservation.snapshot.val() as LiveRide)
   }
-  const ride = normalizeRide(reservation.snapshot.val() as LiveRide)
 
   if (ride.demoMode) {
     await update(ref(db), {
@@ -598,17 +661,16 @@ export async function acceptRide(
 }
 
 /**
- * Runs only in the passenger application. The funding key stays in that
- * browser, so a separately hosted driver app can never retrieve it.
+ * Runs only in a browser that holds the passenger key. A separately hosted
+ * driver app can never retrieve that browser-local key.
  */
 export async function fundRideEscrow(
   passengerId: string,
   rideId: string,
 ): Promise<boolean> {
   const db = roleDatabase("passenger")
-  const reservation = await runTransaction(
-    ref(db, `rides/${rideId}`),
-    (current: LiveRide | null) => {
+  const reservation = await retryFirebaseTransaction(() =>
+    runTransaction(ref(db, `rides/${rideId}`), (current: LiveRide | null) => {
       if (
         !current ||
         current.passengerId !== passengerId ||
@@ -624,7 +686,7 @@ export async function fundRideEscrow(
         paymentStatus: "funding_broadcasting",
         updatedAt: Date.now(),
       }
-    },
+    }),
   )
   if (!reservation.committed) return false
   const ride = normalizeRide(reservation.snapshot.val() as LiveRide)
@@ -641,9 +703,8 @@ export async function fundRideEscrow(
     )
     fundingTxid = await fundEscrow(escrow, passengerWif)
     const fundedAt = Date.now()
-    const funded = await runTransaction(
-      ref(db, `rides/${rideId}`),
-      (current: LiveRide | null) => {
+    const funded = await retryFirebaseTransaction(() =>
+      runTransaction(ref(db, `rides/${rideId}`), (current: LiveRide | null) => {
         if (
           !current ||
           current.passengerId !== passengerId ||
@@ -659,7 +720,7 @@ export async function fundRideEscrow(
           escrow: { ...escrow, fundingTxid },
           updatedAt: fundedAt,
         }
-      },
+      }),
     )
     if (!funded.committed) {
       // A broadcast tx is authoritative, even if this client lost the status
@@ -702,8 +763,10 @@ export async function fundRideEscrow(
       return true
     }
     if (error instanceof EscrowBroadcastPendingError) {
-      await update(ref(db, `rides/${rideId}/escrow`), { error: message })
-      throw error
+      // The broadcast response may be lost after the node accepted it. Leave
+      // the ride in its in-progress state; the coordinator reconciles the
+      // covenant UTXO and retries safely if it never arrives.
+      return false
     }
     await runTransaction(
       ref(db, `rides/${rideId}`),
@@ -731,6 +794,105 @@ export async function fundRideEscrow(
 }
 
 /**
+ * Reconciles an interrupted funding flow from the contract UTXO itself. The
+ * covenant is the source of truth when a browser loses a broadcast response.
+ */
+export async function reconcileEscrowFunding(
+  passengerId: string,
+  rideId: string,
+): Promise<boolean> {
+  const db = roleDatabase("passenger")
+  const snapshot = await get(ref(db, `rides/${rideId}`))
+  if (!snapshot.exists()) return false
+  const ride = normalizeRide(snapshot.val() as LiveRide)
+  if (
+    ride.passengerId !== passengerId ||
+    ride.demoMode ||
+    !ride.escrow ||
+    ride.escrow.fundingTxid ||
+    !["funding", "accepted"].includes(ride.status)
+  ) {
+    return false
+  }
+  const fundingTxid = await getEscrowFundingTxid(ride.escrow)
+  if (!fundingTxid) {
+    const hasWaitedForBroadcast =
+      ride.status === "funding" &&
+      ride.paymentStatus === "funding_broadcasting" &&
+      Date.now() - ride.updatedAt >= 20_000
+    if (!hasWaitedForBroadcast) return false
+
+    // Re-broadcasting is safe here: the same passenger UTXOs and contract
+    // output produce the same transaction; a node that already has it returns
+    // the existing txid, and a newly available node can accept it.
+    const restarted = await retryFirebaseTransaction(() =>
+      runTransaction(ref(db, `rides/${rideId}`), (current: LiveRide | null) => {
+        if (
+          !current ||
+          current.passengerId !== passengerId ||
+          current.status !== "funding" ||
+          current.paymentStatus !== "funding_broadcasting" ||
+          !current.escrow ||
+          current.escrow.fundingTxid
+        ) {
+          return
+        }
+        const { fundingError: _fundingError, ...retryingRide } = current
+        return {
+          ...retryingRide,
+          paymentStatus: "funding",
+          escrow: { ...current.escrow, error: null },
+          updatedAt: Date.now(),
+        }
+      }),
+    )
+    return restarted.committed
+  }
+  const fundedAt = Date.now()
+  const funded = await retryFirebaseTransaction(() =>
+    runTransaction(ref(db, `rides/${rideId}`), (current: LiveRide | null) => {
+      if (
+        !current ||
+        current.passengerId !== passengerId ||
+        !current.escrow ||
+        current.escrow.fundingTxid ||
+        !["funding", "accepted"].includes(current.status)
+      ) {
+        return
+      }
+      const { fundingError: _fundingError, ...recoveredRide } = current
+      return {
+        ...recoveredRide,
+        status: "accepted",
+        paymentStatus: "funded",
+        acceptedAt: current.acceptedAt ?? fundedAt,
+        escrow: { ...current.escrow, fundingTxid, error: null },
+        updatedAt: fundedAt,
+      }
+    }),
+  )
+  if (!funded.committed) {
+    const latest = normalizeRide(funded.snapshot.val() as LiveRide)
+    return Boolean(latest.escrow?.fundingTxid)
+  }
+  const statusWrites: Record<string, unknown> = {
+    [`passengerRides/${passengerId}/${rideId}/status`]: "accepted",
+  }
+  if (ride.driverId) {
+    statusWrites[`driverRequests/${ride.driverId}/${rideId}/status`] =
+      "accepted"
+  }
+  await update(ref(db), statusWrites)
+  void refreshChainWallets([
+    {
+      role: "passenger",
+      uid: passengerId,
+      address: ride.escrow.passengerAddress,
+    },
+  ])
+  return true
+}
+/**
  * Recovers a ride that was left in `funding` by an interrupted browser or
  * network request. It first checks the actual contract address, avoiding a
  * second funding transaction if the first one already reached the chain.
@@ -751,13 +913,14 @@ export async function retryEscrowFunding(
     return false
 
   if (ride.escrow) {
-    const funded = await isEscrowFunded(ride.escrow)
-    if (funded) {
+    const fundingTxid = await getEscrowFundingTxid(ride.escrow)
+    if (fundingTxid) {
       const now = Date.now()
       await update(ref(db), {
         [`rides/${rideId}/status`]: "accepted",
         [`rides/${rideId}/paymentStatus`]: "funded",
         [`rides/${rideId}/acceptedAt`]: now,
+        [`rides/${rideId}/escrow/fundingTxid`]: fundingTxid,
         [`rides/${rideId}/escrow/error`]: null,
         [`rides/${rideId}/updatedAt`]: now,
         [`driverRequests/${driverId}/${rideId}/status`]: "accepted",

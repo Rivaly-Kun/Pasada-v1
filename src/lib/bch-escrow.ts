@@ -3,6 +3,7 @@ import {
   decodeCashAddress,
   decodePrivateKeyWif,
   hash160,
+  hash256,
   hexToBin,
   privateKeyToP2pkhCashAddress,
 } from "@bitauth/libauth"
@@ -21,6 +22,12 @@ export const ESCROW_FUNDING_FEE_RESERVE_SATS = 1_000
 export class EscrowBroadcastPendingError extends Error {}
 
 export type EscrowNetwork = Extract<Network, "chipnet" | "mainnet">
+// CashScript defaults to one Electrum server per network. Keeping a second
+// Chipnet endpoint avoids making a live ride depend on a single WebSocket.
+const ESCROW_ELECTRUM_HOSTS: Record<EscrowNetwork, readonly string[]> = {
+  chipnet: ["chipnet.bch.ninja", "chipnet.imaginary.cash"],
+  mainnet: ["bch.imaginary.cash"],
+}
 
 export type EscrowDescriptor = {
   contractAddress: string
@@ -126,13 +133,17 @@ function verifiedPublicKeyForAddress(
   }
   return normalized
 }
-
-function providerFor(network: EscrowNetwork) {
-  return new ElectrumNetworkProvider(network)
+function providerFor(network: EscrowNetwork, hostname?: string) {
+  return hostname
+    ? new ElectrumNetworkProvider(network, { hostname })
+    : new ElectrumNetworkProvider(network)
 }
 
-function contractFor(descriptor: EscrowDescriptor) {
-  const provider = providerFor(descriptor.network)
+function contractFor(
+  descriptor: EscrowDescriptor,
+  provider = providerFor(descriptor.network),
+) {
+
   const contract = new Contract(
     PasadaEscrowArtifact,
     [
@@ -148,6 +159,80 @@ function contractFor(descriptor: EscrowDescriptor) {
     { provider, contractType: "p2sh32" },
   )
   return { contract, provider }
+}
+function rawTransactionId(rawTxHex: string): string {
+  return binToHex(hash256(hexToBin(rawTxHex)).reverse())
+}
+function isAlreadySubmitted(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /already (?:been )?(?:submitted|known|in (?:the )?mempool|in block chain)/i.test(
+    message,
+  )
+}
+/**
+ * CashScript's `send()` fetches the transaction from the Electrum server after
+ * broadcasting it. That lookup can take up to ten minutes, so it is the wrong
+ * completion signal for an interactive ride flow. We still locally evaluate
+ * the built transaction, then persist the txid returned by broadcast itself.
+ */
+async function buildAndBroadcast(
+  transaction: TransactionBuilder,
+  provider: ElectrumNetworkProvider,
+  timeoutMs = 15_000,
+): Promise<string> {
+  transaction.debug()
+  const rawTxHex = transaction.build()
+  const expectedTxid = rawTransactionId(rawTxHex)
+  try {
+    const broadcastTxid = await within(
+      provider.sendRawTransaction(rawTxHex),
+      timeoutMs,
+      "Timed out while broadcasting the BCH transaction.",
+    )
+    return broadcastTxid || expectedTxid
+  } catch (error) {
+    // A retry after a lost WebSocket response is still a successful broadcast.
+    if (isAlreadySubmitted(error)) return expectedTxid
+    throw error
+  }
+}
+async function fundedEscrowTxidForContract(
+  descriptor: EscrowDescriptor,
+  contract: Contract,
+): Promise<string | null> {
+  const utxos = await within(
+    contract.getUtxos(),
+    15_000,
+    "Timed out while checking the BCH escrow contract.",
+  )
+  const fundedUtxo =
+    utxos.length === 1 && utxos[0].satoshis === BigInt(descriptor.fundingSats)
+      ? utxos[0]
+      : null
+  return fundedUtxo?.txid ?? null
+}
+export async function getEscrowFundingTxid(
+  descriptor: EscrowDescriptor,
+): Promise<string | null> {
+  let lastError: unknown
+  for (const hostname of ESCROW_ELECTRUM_HOSTS[descriptor.network]) {
+    try {
+      const { contract } = contractFor(
+        descriptor,
+        providerFor(descriptor.network, hostname),
+      )
+      const txid = await fundedEscrowTxidForContract(descriptor, contract)
+      if (txid) return txid
+    } catch (error) {
+      lastError = error
+    }
+  }
+  if (lastError) {
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Unable to reach a BCH escrow provider.")
+  }
+  return null
 }
 
 export function prepareEscrowDescriptor(
@@ -205,61 +290,69 @@ export async function fundEscrow(
   passengerWif: string,
 ): Promise<string> {
   const signer = signerForAddress(passengerWif, descriptor.passengerAddress)
-  const { contract, provider } = contractFor(descriptor)
-  if (contract.address !== descriptor.contractAddress) {
-    throw new Error(
-      "The escrow address does not match the ride contract parameters.",
-    )
-  }
-  const utxos = await within(
-    provider.getUtxos(descriptor.passengerAddress),
-    15_000,
-    "Timed out while reading the passenger BCH wallet.",
-  )
-  if (!utxos.length)
-    throw new Error(
-      "No spendable BCH UTXOs were found in the passenger wallet.",
-    )
-
-  const transaction = new TransactionBuilder({
-    provider,
-    maximumFeeSatoshis: BigInt(10_000),
-  })
-    .addInputs(utxos, signer.unlockP2PKH())
-    .addOutput({ to: contract.address, amount: BigInt(descriptor.fundingSats) })
-    .addBchChangeOutputIfNeeded({ to: descriptor.passengerAddress, feeRate: 1 })
-  let tx
-  try {
-    tx = await within(
-      transaction.send(),
-      30_000,
-      "The funding broadcast is still pending. Check the BCH escrow before retrying.",
-    )
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes("broadcast is still pending")
-    ) {
-      throw new EscrowBroadcastPendingError(error.message)
+  let lastError: unknown
+  for (const hostname of ESCROW_ELECTRUM_HOSTS[descriptor.network]) {
+    const provider = providerFor(descriptor.network, hostname)
+    const { contract } = contractFor(descriptor, provider)
+    if (contract.address !== descriptor.contractAddress) {
+      throw new Error(
+        "The escrow address does not match the ride contract parameters.",
+      )
     }
-    throw error
+    try {
+      const utxos = await within(
+        provider.getUtxos(descriptor.passengerAddress),
+        15_000,
+        "Timed out while reading the passenger BCH wallet.",
+      )
+      if (!utxos.length)
+        throw new Error(
+          "No spendable BCH UTXOs were found in the passenger wallet.",
+        )
+      const transaction = new TransactionBuilder({
+        provider,
+        maximumFeeSatoshis: BigInt(10_000),
+      })
+        .addInputs(utxos, signer.unlockP2PKH())
+        .addOutput({
+          to: contract.address,
+          amount: BigInt(descriptor.fundingSats),
+        })
+        .addBchChangeOutputIfNeeded({
+          to: descriptor.passengerAddress,
+          feeRate: 1,
+        })
+      return await buildAndBroadcast(transaction, provider)
+    } catch (error) {
+      lastError = error
+      // The first node may have accepted the transaction but dropped the
+      // response. Check the covenant before trying another broadcaster.
+      const fundedTxid = await fundedEscrowTxidForContract(
+        descriptor,
+        contract,
+      ).catch(() => null)
+      if (fundedTxid) return fundedTxid
+    }
   }
+  if (
+    lastError instanceof Error &&
+    /timed out|websocket|connection|network/i.test(lastError.message)
+  ) {
+    throw new EscrowBroadcastPendingError(
+      "The BCH funding broadcast is still being confirmed. PASADA will check the escrow automatically.",
+    )
 
-  return tx.txid
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Unable to fund the BCH escrow.")
+
 }
 
 export async function isEscrowFunded(
   descriptor: EscrowDescriptor,
 ): Promise<boolean> {
-  const { contract } = contractFor(descriptor)
-  const utxos = await within(
-    contract.getUtxos(),
-    15_000,
-    "Timed out while checking the BCH escrow contract.",
-  )
-  return (
-    utxos.length === 1 && utxos[0].satoshis === BigInt(descriptor.fundingSats)
-  )
+  return Boolean(await getEscrowFundingTxid(descriptor))
 }
 
 export async function settleEscrow(
@@ -267,33 +360,46 @@ export async function settleEscrow(
   driverWif: string,
 ): Promise<string> {
   const signer = signerForAddress(driverWif, descriptor.driverAddress)
-  const { contract, provider } = contractFor(descriptor)
-  const utxos = await contract.getUtxos()
-  if (
-    utxos.length !== 1 ||
-    utxos[0].satoshis !== BigInt(descriptor.fundingSats)
-  ) {
-    throw new Error(
-      "The ride escrow UTXO is unavailable or no longer matches its funded amount.",
-    )
+  let lastError: unknown
+  for (const hostname of ESCROW_ELECTRUM_HOSTS[descriptor.network]) {
+    const provider = providerFor(descriptor.network, hostname)
+    const { contract } = contractFor(descriptor, provider)
+    try {
+      const utxos = await within(
+        contract.getUtxos(),
+        15_000,
+        "Timed out while reading the BCH escrow contract.",
+      )
+      if (
+        utxos.length !== 1 ||
+        utxos[0].satoshis !== BigInt(descriptor.fundingSats)
+      ) {
+        throw new Error(
+          "The ride escrow UTXO is unavailable or no longer matches its funded amount.",
+        )
+      }
+      const transaction = new TransactionBuilder({
+        provider,
+        maximumFeeSatoshis: BigInt(descriptor.releaseFeeSats),
+      })
+        .addInput(utxos[0], contract.unlock.settle(signer))
+        .addOutput({
+          to: descriptor.driverAddress,
+          amount: BigInt(descriptor.driverPayoutSats),
+        })
+        .addOutput({
+          to: descriptor.platformAddress,
+          amount: BigInt(descriptor.platformFeeSats),
+        })
+      return await buildAndBroadcast(transaction, provider)
+    } catch (error) {
+      lastError = error
+    }
   }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Unable to settle the BCH escrow.")
 
-  const tx = await new TransactionBuilder({
-    provider,
-    maximumFeeSatoshis: BigInt(descriptor.releaseFeeSats),
-  })
-    .addInput(utxos[0], contract.unlock.settle(signer))
-    .addOutput({
-      to: descriptor.driverAddress,
-      amount: BigInt(descriptor.driverPayoutSats),
-    })
-    .addOutput({
-      to: descriptor.platformAddress,
-      amount: BigInt(descriptor.platformFeeSats),
-    })
-    .send()
-
-  return tx.txid
 }
 
 export async function refundEscrow(
@@ -301,25 +407,42 @@ export async function refundEscrow(
   passengerWif: string,
 ): Promise<string> {
   const signer = signerForAddress(passengerWif, descriptor.passengerAddress)
-  const { contract, provider } = contractFor(descriptor)
-  const utxos = await contract.getUtxos()
-  if (
-    utxos.length !== 1 ||
-    utxos[0].satoshis !== BigInt(descriptor.fundingSats)
-  ) {
-    throw new Error(
-      "The ride escrow UTXO is unavailable or no longer matches its funded amount.",
-    )
-  }
 
   const refundSats = descriptor.fundingSats - descriptor.releaseFeeSats
-  const tx = await new TransactionBuilder({
-    provider,
-    maximumFeeSatoshis: BigInt(descriptor.releaseFeeSats),
-  })
-    .addInput(utxos[0], contract.unlock.refund(signer))
-    .addOutput({ to: descriptor.passengerAddress, amount: BigInt(refundSats) })
-    .send()
+  let lastError: unknown
+  for (const hostname of ESCROW_ELECTRUM_HOSTS[descriptor.network]) {
+    const provider = providerFor(descriptor.network, hostname)
+    const { contract } = contractFor(descriptor, provider)
+    try {
+      const utxos = await within(
+        contract.getUtxos(),
+        15_000,
+        "Timed out while reading the BCH escrow contract.",
+      )
+      if (
+        utxos.length !== 1 ||
+        utxos[0].satoshis !== BigInt(descriptor.fundingSats)
+      ) {
+        throw new Error(
+          "The ride escrow UTXO is unavailable or no longer matches its funded amount.",
+        )
+      }
+      const transaction = new TransactionBuilder({
+        provider,
+        maximumFeeSatoshis: BigInt(descriptor.releaseFeeSats),
+      })
+        .addInput(utxos[0], contract.unlock.refund(signer))
+        .addOutput({
+          to: descriptor.passengerAddress,
+          amount: BigInt(refundSats),
+        })
+      return await buildAndBroadcast(transaction, provider)
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Unable to refund the BCH escrow.")
 
-  return tx.txid
 }
