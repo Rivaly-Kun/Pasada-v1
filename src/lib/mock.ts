@@ -1,0 +1,265 @@
+import { PESO } from './fare'
+import type { ChainTx, Driver, ManagedUser, RideRecord, WalletEntry } from './types'
+
+export const ORMOC_PLACES = [
+  'Ormoc City Superdome',
+  'Ormoc City Public Market',
+  'Brgy. Cogon, Ormoc',
+  'Ormoc Terminal, Brgy. Can-adieng',
+  'Gaisano Capital Ormoc',
+  'Robinsons Ormoc, Brgy. Punta',
+  'Ormoc District Hospital',
+  'Lake Danao Road, Brgy. Milagro',
+  'Brgy. Linao, Ormoc',
+  'Veterans Park, Brgy. District 22',
+]
+
+export const DRIVERS: Driver[] = [
+  {
+    id: 'd-01',
+    name: 'Ronel Bacalso',
+    plate: 'ORM-4471',
+    body: 'Yellow Bajaj RE · Unit 118',
+    rating: 4.92,
+    trips: 1_284,
+    etaMin: 3,
+    bchAddress: 'bitcoincash:qr9k2x7v4ncwm3ta6f8s2ydl0e7hjq5pug8vz3rmqe',
+  },
+  {
+    id: 'd-02',
+    name: 'Marisol Empenio',
+    plate: 'ORM-2093',
+    body: 'Blue TVS King · Unit 042',
+    rating: 4.87,
+    trips: 903,
+    etaMin: 5,
+    bchAddress: 'bitcoincash:qz8m4v0d6prlx2q9t7fenc3ka5wjhy1su0gvr6tdxm',
+  },
+]
+
+export const PASSENGER_WALLET: WalletEntry[] = [
+  {
+    id: 'w-1',
+    label: 'Escrow release · Cogon → Superdome',
+    detail: 'Settlement confirmed',
+    amount: -74 * PESO,
+    txid: '9f31ac72e0b845d1c6f2a09e5b73d81f4c0a6e29bd7315fa8c4e02d9b1673aa5',
+    at: 'Jul 31 · 6:12 PM',
+  },
+  {
+    id: 'w-2',
+    label: 'Top up from Paytaca',
+    detail: 'On-chain deposit · 2 confirmations',
+    amount: 1_500 * PESO,
+    txid: '3c7bd18f04e6295a7fd0c31b8e942a67501fd3ac9e28b74601cf5d2a83be09f4',
+    at: 'Jul 30 · 9:40 AM',
+  },
+  {
+    id: 'w-3',
+    label: 'Cancellation refund',
+    detail: 'Driver cancelled — full refund',
+    amount: 65 * PESO,
+    txid: 'ad5209ce7b1348f0a6d92ec8410fb37e5d92016ca8437bd0e6f21c94a7830be5',
+    at: 'Jul 28 · 7:55 AM',
+  },
+]
+
+export const DRIVER_WALLET: WalletEntry[] = [
+  {
+    id: 'e-1',
+    label: 'Ride payout · Punta → Public Market',
+    detail: 'Multi-output settlement',
+    amount: 69 * PESO,
+    txid: '5e2f9c81a04b7d36ce18205fb739a0c4d61e8f52739bac04e1d67f9028cb35a1',
+    at: 'Aug 1 · 8:22 AM',
+  },
+  {
+    id: 'e-2',
+    label: 'Ride payout · Linao → Terminal',
+    detail: 'Multi-output settlement',
+    amount: 87 * PESO,
+    txid: 'b71c05de9a2438f6017cd23e5b8409af6c3e10d548b9a27f36ce80145dab9273',
+    at: 'Aug 1 · 7:03 AM',
+  },
+  {
+    id: 'e-3',
+    label: 'Withdrawal to Paytaca',
+    detail: 'Off-platform transfer',
+    amount: -2_400 * PESO,
+    at: 'Jul 31 · 9:15 PM',
+  },
+]
+
+export const PASSENGER_RIDES: RideRecord[] = [
+  {
+    id: 'r-1',
+    from: 'Brgy. Cogon, Ormoc',
+    to: 'Ormoc City Superdome',
+    distanceKm: 3.2,
+    status: 'completed',
+    method: 'bch',
+    total: 74 * PESO,
+    driver: 'Ronel Bacalso',
+    configVersion: 'v2',
+    txid: '9f31ac72e0b845d1c6f2a09e5b73d81f4c0a6e29bd7315fa8c4e02d9b1673aa5',
+    at: 'Jul 31 · 6:12 PM',
+  },
+  {
+    id: 'r-2',
+    from: 'Gaisano Capital Ormoc',
+    to: 'Brgy. Linao, Ormoc',
+    distanceKm: 2.1,
+    status: 'completed',
+    method: 'bch',
+    total: 65 * PESO,
+    driver: 'Marisol Empenio',
+    configVersion: 'v2',
+    at: 'Jul 29 · 11:30 AM',
+  },
+  {
+    id: 'r-3',
+    from: 'Ormoc District Hospital',
+    to: 'Veterans Park, Brgy. District 22',
+    distanceKm: 1.4,
+    status: 'cancelled',
+    method: 'bch',
+    total: 0,
+    driver: '—',
+    configVersion: 'v2',
+    at: 'Jul 28 · 7:55 AM',
+  },
+]
+
+export const MANAGED_USERS: ManagedUser[] = [
+  {
+    id: 'u-01',
+    name: 'Ronel Bacalso',
+    kind: 'driver',
+    state: 'active',
+    bchAddress: 'bitcoincash:qr9k2x7v4ncwm3ta6f8s2ydl0e7hjq5pug8vz3rmqe',
+    joined: '2025-11-04',
+    trips: 1_284,
+    vehicle: 'Bajaj RE · ORM-4471',
+  },
+  {
+    id: 'u-02',
+    name: 'Marisol Empenio',
+    kind: 'driver',
+    state: 'active',
+    bchAddress: 'bitcoincash:qz8m4v0d6prlx2q9t7fenc3ka5wjhy1su0gvr6tdxm',
+    joined: '2026-01-19',
+    trips: 903,
+    vehicle: 'TVS King · ORM-2093',
+  },
+  {
+    id: 'u-03',
+    name: 'Dennis Malinao',
+    kind: 'driver',
+    state: 'pending',
+    bchAddress: 'bitcoincash:qp3n8w5c1kfaz7db0e6ry94thm2xls0quvj5g8ecrt',
+    joined: '2026-07-28',
+    trips: 0,
+    vehicle: 'Bajaj RE · ORM-5510',
+  },
+  {
+    id: 'u-04',
+    name: 'Jeric Tabada',
+    kind: 'driver',
+    state: 'pending',
+    bchAddress: 'bitcoincash:qw6r0t2y8xhue4vs1nb3d7pklm9jaz5cfg0qi2odhv',
+    joined: '2026-07-30',
+    trips: 0,
+    vehicle: 'TVS King · ORM-6127',
+  },
+  {
+    id: 'u-05',
+    name: 'Alona Villaruz',
+    kind: 'passenger',
+    state: 'active',
+    bchAddress: 'bitcoincash:qk4d7f1m9zetnb0ux6c2vla8jrs3hwgy5po1qvtcnd',
+    joined: '2026-02-11',
+    trips: 64,
+  },
+  {
+    id: 'u-06',
+    name: 'Bryan Otadoy',
+    kind: 'passenger',
+    state: 'suspended',
+    bchAddress: 'bitcoincash:qv2h8j6b0slkm4wc9nx1ureg7ftp3day5zo0qibmvx',
+    joined: '2026-03-02',
+    trips: 12,
+  },
+  {
+    id: 'u-07',
+    name: 'Karla Sabidong',
+    kind: 'passenger',
+    state: 'active',
+    bchAddress: 'bitcoincash:qn5t3g9p7avlqc0dh2xw8mkr6esj1zbf4yu0ivadcm',
+    joined: '2026-05-23',
+    trips: 148,
+  },
+]
+
+export const CHAIN_TXS: ChainTx[] = [
+  {
+    id: 't-1',
+    txid: '5e2f9c81a04b7d36ce18205fb739a0c4d61e8f52739bac04e1d67f9028cb35a1',
+    kind: 'settlement',
+    amount: 74 * PESO,
+    confirmations: 12,
+    at: '08:22:41',
+  },
+  {
+    id: 't-2',
+    txid: 'c1a70d3fb9e254806af31c7d0b6e529148fa03cd7e21b95604df8a3e17c0b268',
+    kind: 'escrow_fund',
+    amount: 92 * PESO,
+    confirmations: 3,
+    at: '08:19:07',
+  },
+  {
+    id: 't-3',
+    txid: '2b84fe07c5d1936ae0472f8bd35c19604a7e2d81fb0935cae6142d7f80b95c3e',
+    kind: 'commission',
+    amount: 5 * PESO,
+    confirmations: 12,
+    at: '08:18:52',
+  },
+  {
+    id: 't-4',
+    txid: '7d093ca6e21f487b50cd83e94a26f1b0537ec8da902f4165be7a03cd18f26e94',
+    kind: 'refund',
+    amount: 65 * PESO,
+    confirmations: 27,
+    at: '07:55:16',
+  },
+  {
+    id: 't-5',
+    txid: 'e40b6f159c832ad70e5b14926fc80d3a71e05b8c46d29fa3017be5c298d43706',
+    kind: 'settlement',
+    amount: 87 * PESO,
+    confirmations: 41,
+    at: '07:03:38',
+  },
+]
+
+export const ADS = [
+  {
+    title: 'Ormoc Piña Festival',
+    body: 'Extra tricycle units on standby along Real St. all week.',
+    tag: 'City update',
+    accent: 'red' as const,
+  },
+  {
+    title: 'Escrow, not trust',
+    body: 'Your fare is locked in a CashScript contract until the ride is verified complete.',
+    tag: 'How PASADA works',
+    accent: 'blue' as const,
+  },
+  {
+    title: 'Ride safe after dark',
+    body: 'Night trips 9PM–5AM carry the ordinance surcharge. Always confirm the plate.',
+    tag: 'Safety',
+    accent: 'ink' as const,
+  },
+]

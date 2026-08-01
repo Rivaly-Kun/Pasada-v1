@@ -1,0 +1,74 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-display: 'Archivo', system-ui, sans-serif;
+  --font-sans: 'Public Sans', system-ui, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, monospace;
+
+  /* Uploaded palette */
+  --color-pasada-red: #ef4b4b;
+  --color-pasada-red-deep: #b62f2f;
+  --color-pasada-blue: #4a72b8;
+  --color-pasada-blue-deep: #2f4c80;
+
+  /* Structural ink ramp */
+  --color-ink: #0b0b0c;
+  --color-ink-700: #24252a;
+  --color-ink-500: #61636c;
+  --color-ink-300: #a3a5ad;
+  --color-ink-100: #e3e4e8;
+  --color-ink-50: #f2f3f6;
+
+  --color-map: #14161c;
+  --color-map-line: #23262f;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-ink-50);
+    color: var(--color-ink);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+
+  ::selection {
+    background: var(--color-pasada-red);
+    color: white;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-pasada-blue);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Scrollbars stay out of the way until the surface is actually scrolling. */
+  .scroll-quiet {
+    scrollbar-width: none;
+  }
+
+  .scroll-quiet::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}

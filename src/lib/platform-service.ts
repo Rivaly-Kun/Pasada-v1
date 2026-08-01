@@ -1,0 +1,167 @@
+import {
+  onValue,
+  ref,
+  runTransaction,
+  update,
+  type Unsubscribe,
+} from "firebase/database"
+import { normalizeAndValidateBchAddress } from "./bch-wallet"
+import { DEFAULT_FARE_CONFIG } from "./fare"
+import { getScopedFirebase } from "./firebase"
+import type { FareConfig, LiveRide } from "./types"
+
+export const PLATFORM_ACCOUNT_ID = "pasada-platform"
+
+export type PlatformAccount = {
+  id: typeof PLATFORM_ACCOUNT_ID
+  role: "admin"
+  displayName: string
+  bchAddress: string | null
+  createdAt: number
+  updatedAt: number
+  balance: {
+    availableSats: number
+    bchCommissionSats: number
+    settledRideCount: number
+    updatedAt: number
+  }
+}
+
+export type PlatformMetrics = {
+  totalRideSats: number
+  totalPlatformFeeSats: number
+  totalBchFeeSats: number
+  settledRides: number
+  bchRides: number
+}
+
+function database() {
+  return getScopedFirebase("passenger").database
+}
+
+import { generateBchWallet } from "./bch-wallet"
+
+function defaultAccount(now: number): PlatformAccount {
+  const adminWallet = generateBchWallet()
+  return {
+    id: PLATFORM_ACCOUNT_ID,
+    role: "admin",
+    displayName: "PASADA Platform Administrator",
+    bchAddress: adminWallet.address,
+    createdAt: now,
+    updatedAt: now,
+    balance: {
+      availableSats: 0,
+      bchCommissionSats: 0,
+      settledRideCount: 0,
+      updatedAt: now,
+    },
+  }
+}
+
+/** Creates the single, public platform ledger account with a dedicated Chipnet fee address. */
+export async function ensurePlatformState(): Promise<void> {
+  const now = Date.now()
+  await runTransaction(
+    ref(database(), "platform"),
+    (current: Record<string, unknown> | null) => {
+      const existingAccount = (current?.account ??
+        null) as PlatformAccount | null
+      const account =
+        existingAccount && existingAccount.bchAddress
+          ? existingAccount
+          : defaultAccount(now)
+      if (!current) return { account, fareConfig: DEFAULT_FARE_CONFIG }
+      return {
+        ...current,
+        account,
+        fareConfig: current.fareConfig ?? DEFAULT_FARE_CONFIG,
+      }
+    },
+  )
+}
+
+export function subscribePlatformFareConfig(
+  onConfig: (config: FareConfig) => void,
+): Unsubscribe {
+  return onValue(ref(database(), "platform/fareConfig"), (snapshot) => {
+    if (!snapshot.exists()) {
+      onConfig(DEFAULT_FARE_CONFIG)
+      return
+    }
+    onConfig({
+      ...DEFAULT_FARE_CONFIG,
+      ...snapshot.val() as Partial<FareConfig>,
+    })
+  })
+}
+
+export async function publishPlatformFareConfig(
+  config: FareConfig,
+): Promise<void> {
+  const now = Date.now()
+  await update(ref(database()), {
+    "platform/fareConfig": config,
+    [`platform/fareConfigHistory/${config.version}_${now}`]: {
+      ...config,
+      publishedAt: now,
+    },
+    "platform/account/updatedAt": now,
+  })
+}
+
+export function subscribePlatformAccount(
+  onAccount: (account: PlatformAccount | null) => void,
+): Unsubscribe {
+  return onValue(ref(database(), "platform/account"), (snapshot) => {
+    onAccount(snapshot.exists() ? snapshot.val() as PlatformAccount : null)
+  })
+}
+
+export async function setPlatformBchAddress(value: string): Promise<void> {
+  const address = value.trim()
+  if (!address) {
+    await update(ref(database(), "platform/account"), {
+      bchAddress: null,
+      updatedAt: Date.now(),
+    })
+    return
+  }
+  const validated = normalizeAndValidateBchAddress(address)
+  if (!validated.valid) throw new Error(validated.error)
+  await update(ref(database(), "platform/account"), {
+    bchAddress: validated.address,
+    updatedAt: Date.now(),
+  })
+}
+
+export function subscribePlatformMetrics(
+  onMetrics: (metrics: PlatformMetrics) => void,
+): Unsubscribe {
+  return onValue(ref(database(), "rides"), (snapshot) => {
+    const rides = snapshot.exists()
+      ? Object.values(snapshot.val() as Record<string, LiveRide>)
+      : []
+    const metrics = rides.reduce<PlatformMetrics>(
+      (total, ride) => {
+        if (ride.status !== "settled") return total
+        const fareSats = Number(ride.fareSats ?? 0)
+        const feeSats = Number(ride.platformFeeSats ?? 0)
+        total.totalRideSats += fareSats
+        total.totalPlatformFeeSats += feeSats
+        total.settledRides += 1
+        total.bchRides += 1
+        total.totalBchFeeSats += feeSats
+        return total
+      },
+      {
+        totalRideSats: 0,
+        totalPlatformFeeSats: 0,
+        totalBchFeeSats: 0,
+        settledRides: 0,
+        bchRides: 0,
+      },
+    )
+    onMetrics(metrics)
+  })
+}

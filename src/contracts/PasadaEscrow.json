@@ -1,0 +1,128 @@
+{
+  "contractName": "PasadaEscrow",
+  "constructorInputs": [
+    {
+      "name": "passenger",
+      "type": "pubkey"
+    },
+    {
+      "name": "driver",
+      "type": "pubkey"
+    },
+    {
+      "name": "passengerPkh",
+      "type": "bytes20"
+    },
+    {
+      "name": "driverPkh",
+      "type": "bytes20"
+    },
+    {
+      "name": "platformPkh",
+      "type": "bytes20"
+    },
+    {
+      "name": "driverPayout",
+      "type": "int"
+    },
+    {
+      "name": "platformFee",
+      "type": "int"
+    },
+    {
+      "name": "releaseFee",
+      "type": "int"
+    }
+  ],
+  "abi": [
+    {
+      "name": "settle",
+      "inputs": [
+        {
+          "name": "driverSignature",
+          "type": "sig"
+        }
+      ]
+    },
+    {
+      "name": "refund",
+      "inputs": [
+        {
+          "name": "passengerSignature",
+          "type": "sig"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_8 OP_PICK OP_0 OP_NUMEQUAL OP_IF OP_9 OP_ROLL OP_ROT OP_CHECKSIGVERIFY OP_TXINPUTCOUNT OP_1 OP_NUMEQUALVERIFY OP_TXOUTPUTCOUNT OP_2 OP_NUMEQUALVERIFY OP_INPUTINDEX OP_UTXOVALUE OP_5 OP_PICK OP_7 OP_PICK OP_ADD OP_8 OP_ROLL OP_ADD OP_NUMEQUALVERIFY OP_0 OP_OUTPUTBYTECODE 76a914 OP_4 OP_ROLL OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_4 OP_ROLL OP_NUMEQUALVERIFY OP_1 OP_OUTPUTBYTECODE 76a914 OP_4 OP_ROLL OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_1 OP_OUTPUTVALUE OP_3 OP_ROLL OP_NUMEQUAL OP_NIP OP_NIP OP_NIP OP_ELSE OP_8 OP_ROLL OP_1 OP_NUMEQUALVERIFY OP_8 OP_ROLL OP_SWAP OP_CHECKSIGVERIFY OP_TXINPUTCOUNT OP_1 OP_NUMEQUALVERIFY OP_TXOUTPUTCOUNT OP_1 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTBYTECODE 76a914 OP_3 OP_ROLL OP_CAT 88ac OP_CAT OP_EQUALVERIFY OP_0 OP_OUTPUTVALUE OP_INPUTINDEX OP_UTXOVALUE OP_7 OP_ROLL OP_SUB OP_NUMEQUALVERIFY OP_2DROP OP_2DROP OP_DROP OP_1 OP_ENDIF",
+  "source": "pragma cashscript ^0.13.0;\n\n// A ride-specific BCH escrow. The funding transaction creates one UTXO at the\n// address derived from these immutable parameters. It can only be released to\n// the assigned driver's address and the configured PASADA fee address, or\n// refunded to the passenger.\ncontract PasadaEscrow(\n    pubkey passenger,\n    pubkey driver,\n    bytes20 passengerPkh,\n    bytes20 driverPkh,\n    bytes20 platformPkh,\n    int driverPayout,\n    int platformFee,\n    int releaseFee\n) {\n    function settle(sig driverSignature) {\n        require(checkSig(driverSignature, driver));\n        require(tx.inputs.length == 1);\n        require(tx.outputs.length == 2);\n        require(tx.inputs[this.activeInputIndex].value == driverPayout + platformFee + releaseFee);\n        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(driverPkh));\n        require(tx.outputs[0].value == driverPayout);\n        require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(platformPkh));\n        require(tx.outputs[1].value == platformFee);\n    }\n\n    function refund(sig passengerSignature) {\n        require(checkSig(passengerSignature, passenger));\n        require(tx.inputs.length == 1);\n        require(tx.outputs.length == 1);\n        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(passengerPkh));\n        require(tx.outputs[0].value == tx.inputs[this.activeInputIndex].value - releaseFee);\n    }\n}\n",
+  "fingerprint": "84c57a18495231fc0e8106897279e98091ad80d67e71be0067daa87552cbe734",
+  "debug": {
+    "bytecode": "5879009c63597a7badc3519dc4529dc0c65579577993587a939d00cd0376a914547a7e0288ac7e8800cc547a9d51cd0376a914547a7e0288ac7e8851cc537a9c77777767587a519d587a7cadc3519dc4519d00cd0376a914537a7e0288ac7e8800ccc0c6577a949d6d6d755168",
+    "sourceMap": "17:4:26:5;;;;;18:25:18:40;;:42::48;:8::51:1;19:16:19:32:0;:36::37;:8::39:1;20:16:20:33:0;:37::38;:8::40:1;21:26:21:47:0;:16::54:1;:58::70:0;;:73::84;;:58:::1;:87::97:0;;:58:::1;:8::99;22:27:22:28:0;:16::45:1;:49::84:0;:74::83;;:49::84:1;;;:8::86;23:27:23:28:0;:16::35:1;:39::51:0;;:8::53:1;24:27:24:28:0;:16::45:1;:49::86:0;:74::85;;:49::86:1;;;:8::88;25:27:25:28:0;:16::35:1;:39::50:0;;:8::52:1;17:41:26:5;;;:4;28::34::0;;;;29:25:29:43;;:45::54;:8::57:1;30:16:30:32:0;:36::37;:8::39:1;31:16:31:33:0;:37::38;:8::40:1;32:27:32:28:0;:16::45:1;:49::87:0;:74::86;;:49::87:1;;;:8::89;33:27:33:28:0;:16::35:1;:49::70:0;:39::77:1;:80::90:0;;:39:::1;:8::92;28:44:34:5;;;;7:0:35:1",
+    "logs": [],
+    "requires": [
+      {
+        "ip": 16,
+        "line": 18
+      },
+      {
+        "ip": 19,
+        "line": 19
+      },
+      {
+        "ip": 22,
+        "line": 20
+      },
+      {
+        "ip": 33,
+        "line": 21
+      },
+      {
+        "ip": 42,
+        "line": 22
+      },
+      {
+        "ip": 47,
+        "line": 23
+      },
+      {
+        "ip": 56,
+        "line": 24
+      },
+      {
+        "ip": 62,
+        "line": 25
+      },
+      {
+        "ip": 73,
+        "line": 29
+      },
+      {
+        "ip": 76,
+        "line": 30
+      },
+      {
+        "ip": 79,
+        "line": 31
+      },
+      {
+        "ip": 88,
+        "line": 32
+      },
+      {
+        "ip": 96,
+        "line": 33
+      }
+    ]
+  },
+  "compiler": {
+    "name": "cashc",
+    "version": "0.13.0",
+    "options": {
+      "enforceFunctionParameterTypes": true,
+      "enforceLocktimeGuard": true
+    }
+  },
+  "updatedAt": "2026-08-01T13:48:54.154Z"
+}

@@ -1,0 +1,35 @@
+pragma cashscript ^0.13.0;
+
+// A ride-specific BCH escrow. The funding transaction creates one UTXO at the
+// address derived from these immutable parameters. It can only be released to
+// the assigned driver's address and the configured PASADA fee address, or
+// refunded to the passenger.
+contract PasadaEscrow(
+    pubkey passenger,
+    pubkey driver,
+    bytes20 passengerPkh,
+    bytes20 driverPkh,
+    bytes20 platformPkh,
+    int driverPayout,
+    int platformFee,
+    int releaseFee
+) {
+    function settle(sig driverSignature) {
+        require(checkSig(driverSignature, driver));
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        require(tx.inputs[this.activeInputIndex].value == driverPayout + platformFee + releaseFee);
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(driverPkh));
+        require(tx.outputs[0].value == driverPayout);
+        require(tx.outputs[1].lockingBytecode == new LockingBytecodeP2PKH(platformPkh));
+        require(tx.outputs[1].value == platformFee);
+    }
+
+    function refund(sig passengerSignature) {
+        require(checkSig(passengerSignature, passenger));
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 1);
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(passengerPkh));
+        require(tx.outputs[0].value == tx.inputs[this.activeInputIndex].value - releaseFee);
+    }
+}

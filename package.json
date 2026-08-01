@@ -1,0 +1,36 @@
+{
+  "name": "figma-make-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "contracts:build": "node scripts/compile-contracts.mjs",
+    "prebuild": "npm run contracts:build",
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "format": "oxfmt"
+  },
+  "dependencies": {
+    "@bitauth/libauth": "^3.0.0",
+    "@electrum-cash/network": "^4.2.2",
+    "cashscript": "0.13.0",
+    "electrum-cash": "^3.2.0",
+    "firebase": "^12.17.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/google.maps": "^3.65.4",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "cashc": "0.13.0",
+    "oxfmt": "^0.2.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^8.0.0"
+  }
+}

@@ -1,0 +1,499 @@
+import {
+  createUserWithEmailAndPassword,
+  deleteUser,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+  updateProfile,
+  type User,
+  type UserCredential,
+} from "firebase/auth"
+import { get, ref, runTransaction, update } from "firebase/database"
+import {
+  fetchBchAddressInfo,
+  generateBchWallet,
+  normalizeAndValidateBchAddress,
+  subscribeAddressToWatchtower,
+  validatePrivateKeyForBchAddress,
+} from "./bch-wallet"
+import { satoshisToCentavos } from "./fare"
+import { getScopedFirebase, type AppRole } from "./firebase"
+import type { PasadaAccount } from "./types"
+
+export type WalletSource = "existing" | "generated"
+
+export type PasadaRegistration = {
+  displayName: string
+  email: string
+  password: string
+  bchAddress: string
+  walletSource: WalletSource
+  privateKeyWif?: string
+  plate?: string
+  vehicleBody?: string
+}
+
+function localWalletKey(address: string) {
+  return `pasada_wif_${address.toLowerCase()}`
+}
+
+/** True only when this browser holds a signing key for the exact BCH address. */
+export function hasLocalPasadaWalletKey(address: string): boolean {
+  if (typeof window === "undefined") return false
+  const validated = normalizeAndValidateBchAddress(address)
+  return Boolean(
+    validated.valid && localStorage.getItem(localWalletKey(validated.address)),
+  )
+}
+
+/**
+ * Keeps the signing key in browser storage only. Firebase receives the public
+ * address and wallet metadata, never a newly linked private key.
+ */
+export function linkPasadaWalletSigningKey(
+  address: string,
+  privateKeyWif: string,
+): string {
+  const validated = validatePrivateKeyForBchAddress(privateKeyWif, address)
+  if (!validated.valid) throw new Error(validated.error)
+  if (typeof window === "undefined") {
+    throw new Error("A BCH signing key can only be linked in a browser.")
+  }
+  try {
+    localStorage.setItem(
+      localWalletKey(validated.address),
+      validated.privateKeyWif,
+    )
+  } catch {
+    throw new Error(
+      "This browser blocked local wallet storage. Allow site storage and try again.",
+    )
+  }
+  return validated.address
+}
+
+export function observePasadaAuth(
+  role: AppRole,
+  callback: (user: User | null) => void,
+) {
+  const scoped = getScopedFirebase(role)
+  let cancelled = false
+  let unsubscribe: () => void = () => undefined
+  void scoped.persistenceReady.then(() => {
+    if (!cancelled) unsubscribe = onAuthStateChanged(scoped.auth, callback)
+  })
+  return () => {
+    cancelled = true
+    unsubscribe()
+  }
+}
+
+export async function loginPasada(
+  role: AppRole,
+  email: string,
+  password: string,
+) {
+  const scoped = getScopedFirebase(role)
+  await scoped.persistenceReady
+  const credential = await signInWithEmailAndPassword(
+    scoped.auth,
+    email.trim(),
+    password,
+  )
+  return credential.user
+}
+
+export async function registerPasada(role: AppRole, input: PasadaRegistration) {
+  const validated = normalizeAndValidateBchAddress(input.bchAddress)
+  if (!validated.valid) throw new Error(validated.error)
+  if (input.privateKeyWif) {
+    const validatedKey = validatePrivateKeyForBchAddress(
+      input.privateKeyWif,
+      validated.address,
+    )
+    if (!validatedKey.valid) throw new Error(validatedKey.error)
+  }
+  if (
+    role === "driver" &&
+    (!input.plate?.trim() || !input.vehicleBody?.trim())
+  ) {
+    throw new Error("Enter the driver plate number and vehicle description.")
+  }
+
+  let initialBalanceSats = 0
+  try {
+    initialBalanceSats = (await fetchBchAddressInfo(validated.address))
+      .spendableSats
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("rejected this address")
+    )
+      throw error
+  }
+
+  const scoped = getScopedFirebase(role)
+  await scoped.persistenceReady
+  const email = input.email.trim().toLowerCase()
+  let credential: UserCredential
+  let createdAuthUser = false
+
+  try {
+    credential = await createUserWithEmailAndPassword(
+      scoped.auth,
+      email,
+      input.password,
+    )
+    createdAuthUser = true
+  } catch (createError) {
+    const code = firebaseErrorCode(createError)
+    if (code.includes("email-already-in-use")) {
+      try {
+        credential = await signInWithEmailAndPassword(
+          scoped.auth,
+          email,
+          input.password,
+        )
+      } catch {
+        throw new Error(
+          "That email is already registered in Firebase. Please enter the correct password to attach your PASADA profile.",
+        )
+      }
+    } else {
+      throw createError
+    }
+  }
+
+  const now = Date.now()
+  const uid = credential.user.uid
+  const roleCollection = role === "passenger" ? "passengers" : "drivers"
+  try {
+    const [userSnapshot, roleSnapshot, balanceSnapshot] = await Promise.all([
+      get(ref(scoped.database, `users/${uid}`)),
+      get(ref(scoped.database, `${roleCollection}/${uid}`)),
+      get(ref(scoped.database, `roleAccounts/${role}/${uid}/balance`)),
+    ])
+    await updateProfile(credential.user, {
+      displayName: input.displayName.trim(),
+    })
+    const profile = {
+      uid,
+      firebaseUid: uid,
+      displayName: input.displayName.trim(),
+      email,
+      role,
+      bchAddress: validated.address,
+      walletSource: input.walletSource,
+      ...(role === "driver"
+        ? {
+            plate: input.plate!.trim().toUpperCase(),
+            vehicleBody: input.vehicleBody!.trim(),
+            rating: Number(
+              (roleSnapshot.val() as Record<string, unknown> | null)?.rating ??
+                5,
+            ),
+            trips: Number(
+              (roleSnapshot.val() as Record<string, unknown> | null)?.trips ??
+                0,
+            ),
+          }
+        : {}),
+      createdAt: Number(
+        (roleSnapshot.val() as Record<string, unknown> | null)?.createdAt ??
+          now,
+      ),
+      updatedAt: now,
+    }
+    const writes: Record<string, unknown> = {
+      [`users/${uid}/uid`]: uid,
+      [`users/${uid}/email`]: email,
+      [`users/${uid}/roles/${role}`]: true,
+      [`users/${uid}/roleProfiles/${role}`]: profile,
+      [`users/${uid}/updatedAt`]: now,
+      [`${roleCollection}/${uid}`]: {
+        ...roleSnapshot.val() as Record<string, unknown> | null,
+        ...profile,
+        ...(role === "driver"
+          ? {
+              online: Boolean(
+                (roleSnapshot.val() as Record<string, unknown> | null)
+                  ?.online ?? false,
+              ),
+              available: Boolean(
+                (roleSnapshot.val() as Record<string, unknown> | null)
+                  ?.available ?? false,
+              ),
+              assignedRideId:
+                (roleSnapshot.val() as Record<string, unknown> | null)
+                  ?.assignedRideId ?? null,
+            }
+          : {}),
+      },
+      [`roleWallets/${role}/${uid}`]: {
+        uid,
+        role,
+        address: validated.address,
+        network: "chipnet",
+        source: input.walletSource,
+        chainSats: initialBalanceSats,
+        createdAt: now,
+        updatedAt: now,
+      },
+    }
+    if (!userSnapshot.exists()) writes[`users/${uid}/createdAt`] = now
+    if (!balanceSnapshot.exists()) {
+      writes[`roleAccounts/${role}/${uid}/balance`] = {
+        availableSats: initialBalanceSats,
+        chainSats: initialBalanceSats,
+        lockedSats: 0,
+        chainSource: "paytaca_watchtower",
+        lastChainSyncAt: now,
+        updatedAt: now,
+        version: 1,
+      }
+    }
+    await update(ref(scoped.database), writes)
+    // Subscribe to Watchtower so it starts indexing this address on-chain immediately
+    void subscribeAddressToWatchtower(validated.address)
+  } catch (error) {
+    if (createdAuthUser)
+      await deleteUser(credential.user).catch(() => undefined)
+    else await signOut(scoped.auth).catch(() => undefined)
+    throw error
+  }
+  return credential.user
+}
+
+export async function loadPasadaAccount(
+  role: AppRole,
+  user?: User,
+): Promise<PasadaAccount> {
+  const scoped = getScopedFirebase(role)
+  const firebaseUser = user ?? scoped.auth.currentUser
+  if (!firebaseUser)
+    throw new Error(`Log in to the PASADA ${role} app to continue.`)
+  const roleCollection = role === "passenger" ? "passengers" : "drivers"
+  const [
+    userSnapshot,
+    roleSnapshot,
+    walletSnapshot,
+    balanceSnapshot,
+    legacyWallet,
+    legacyBalance,
+  ] = await Promise.all([
+    get(ref(scoped.database, `users/${firebaseUser.uid}`)),
+    get(ref(scoped.database, `${roleCollection}/${firebaseUser.uid}`)),
+    get(ref(scoped.database, `roleWallets/${role}/${firebaseUser.uid}`)),
+    get(
+      ref(scoped.database, `roleAccounts/${role}/${firebaseUser.uid}/balance`),
+    ),
+    get(ref(scoped.database, `wallets/${firebaseUser.uid}`)),
+    get(ref(scoped.database, `accounts/${firebaseUser.uid}/balance`)),
+  ])
+  const userData = userSnapshot.val() as Record<string, unknown> | null
+  const nestedProfiles = (userData?.roleProfiles ??
+    {}) as Record<string, Record<string, unknown>>
+  let roleData = (roleSnapshot.val() ??
+    nestedProfiles[role]) as Record<string, unknown> | null
+  const roles = (userData?.roles ?? {}) as Record<string, boolean>
+
+  let wallet = (walletSnapshot.val() ??
+    legacyWallet.val()) as Record<string, unknown> | null
+  let balance = (balanceSnapshot.val() ??
+    legacyBalance.val()) as Record<string, unknown> | null
+  let address = String(wallet?.address ?? roleData?.bchAddress ?? "")
+  let validated = normalizeAndValidateBchAddress(address)
+
+  // Auto-provision profile and Chipnet wallet if account exists in Auth but lacks database profile
+  if (!roleData || !roles[role] || !validated.valid) {
+    const now = Date.now()
+    const autoWallet = generateBchWallet()
+    const autoAddress = autoWallet.address
+    const displayName =
+      firebaseUser.displayName ||
+      (firebaseUser.email ? firebaseUser.email.split("@")[0] : "") ||
+      (role === "passenger" ? "Passenger" : "Driver")
+    const email = firebaseUser.email || ""
+
+    const profile = {
+      uid: firebaseUser.uid,
+      firebaseUid: firebaseUser.uid,
+      displayName,
+      email,
+      role,
+      bchAddress: autoAddress,
+      walletSource: "generated",
+      ...(role === "driver"
+        ? {
+            plate: "ORM-101",
+            vehicleBody: "Bajaj RE",
+            rating: 5,
+            trips: 0,
+          }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    linkPasadaWalletSigningKey(autoWallet.address, autoWallet.privateKeyWif)
+
+    const writes: Record<string, unknown> = {
+      [`users/${firebaseUser.uid}/uid`]: firebaseUser.uid,
+      [`users/${firebaseUser.uid}/email`]: email,
+      [`users/${firebaseUser.uid}/roles/${role}`]: true,
+      [`users/${firebaseUser.uid}/roleProfiles/${role}`]: profile,
+      [`users/${firebaseUser.uid}/updatedAt`]: now,
+      [`${roleCollection}/${firebaseUser.uid}`]: profile,
+      [`roleWallets/${role}/${firebaseUser.uid}`]: {
+        uid: firebaseUser.uid,
+        role,
+        address: autoAddress,
+        network: "chipnet",
+        source: "generated",
+        chainSats: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      [`roleAccounts/${role}/${firebaseUser.uid}/balance`]: {
+        availableSats: 0,
+        chainSats: 0,
+        lockedSats: 0,
+        chainSource: "paytaca_watchtower",
+        lastChainSyncAt: now,
+        updatedAt: now,
+        version: 1,
+      },
+    }
+
+    await update(ref(scoped.database), writes)
+    roleData = profile
+    address = autoAddress
+    validated = { valid: true, address: autoAddress }
+  } else if (!walletSnapshot.exists() || !balanceSnapshot.exists()) {
+    await update(ref(scoped.database), {
+      [`roleWallets/${role}/${firebaseUser.uid}`]: {
+        uid: firebaseUser.uid,
+        role,
+        address: validated.address,
+        network: "chipnet",
+        source: String(wallet?.source ?? "existing"),
+        updatedAt: Date.now(),
+      },
+      [`roleAccounts/${role}/${firebaseUser.uid}/balance`]: {
+        ...(balance ?? {}),
+        availableSats: Number(balance?.availableSats ?? 0),
+        lockedSats: Number(balance?.lockedSats ?? 0),
+        updatedAt: Date.now(),
+      },
+    })
+  }
+
+  let availableSats = Number(balance?.availableSats ?? 0)
+  // Background balance refresh to keep live blockchain & database synchronized without delaying load
+  void refreshPasadaWalletBalance(
+    role,
+    firebaseUser.uid,
+    validated.address,
+  ).catch(() => undefined)
+
+  return {
+    uid: firebaseUser.uid,
+    firebaseUid: firebaseUser.uid,
+    role,
+    displayName: String(
+      roleData?.displayName ?? firebaseUser.displayName ?? role,
+    ),
+    bchAddress: validated.address,
+    availableSats,
+    availableCentavos: satoshisToCentavos(availableSats),
+    authenticated: true,
+    plate: role === "driver" ? String(roleData?.plate ?? "ORM-101") : undefined,
+    vehicleBody:
+      role === "driver"
+        ? String(roleData?.vehicleBody ?? roleData?.body ?? "Bajaj RE")
+        : undefined,
+    rating: role === "driver" ? Number(roleData?.rating ?? 5) : undefined,
+    trips: role === "driver" ? Number(roleData?.trips ?? 0) : undefined,
+  }
+}
+
+export async function refreshPasadaWalletBalance(
+  role: AppRole,
+  uid: string,
+  bchAddress: string,
+): Promise<number> {
+  const info = await fetchBchAddressInfo(bchAddress)
+  const scoped = getScopedFirebase(role)
+  let availableSats = info.spendableSats
+  const now = Date.now()
+  await runTransaction(
+    ref(scoped.database, `roleAccounts/${role}/${uid}/balance`),
+    (current: Record<string, unknown> | null) => {
+      // The app never adjusts wallet balances as an internal ledger. This is
+      // the address balance reported by the BCH network, including mempool
+      // transactions, so a refresh cannot overwrite a payout or a debit.
+      availableSats = info.spendableSats
+      return {
+        ...(current ?? {}),
+        availableSats,
+        chainSats: info.spendableSats,
+        lockedSats: 0,
+        platformDebitsSats: 0,
+        pendingRideCreditsSats: 0,
+        chainSource: "paytaca_watchtower",
+        lastChainSyncAt: now,
+        updatedAt: now,
+        version: Number(current?.version ?? 0) + 1,
+      }
+    },
+  )
+  await update(ref(scoped.database, `roleWallets/${role}/${uid}`), {
+    address: info.address,
+    chainSats: info.spendableSats,
+    lastChainSyncAt: now,
+    updatedAt: now,
+  })
+  return availableSats
+}
+
+export async function logoutPasada(role: AppRole) {
+  await signOut(getScopedFirebase(role).auth)
+}
+
+export function friendlyAuthError(error: unknown): string {
+  const code = firebaseErrorCode(error)
+  if (
+    code.includes("invalid-credential") ||
+    code.includes("user-not-found") ||
+    code.includes("wrong-password")
+  ) {
+    return "The email or password is incorrect."
+  }
+  if (code.includes("email-already-in-use")) {
+    return "That email is already registered in Firebase. Enter its password to attach this PASADA profile."
+  }
+  if (code.includes("weak-password"))
+    return "Use a password with at least 6 characters."
+  if (code.includes("invalid-email")) return "Enter a valid email address."
+  if (code.includes("network-request-failed"))
+    return "Check your internet connection and try again."
+  if (
+    code.includes("PERMISSION_DENIED") ||
+    code.includes("permission-denied")
+  ) {
+    return "Firebase Realtime Database permission denied. Please check your database rules in Firebase Console."
+  }
+  return error instanceof Error
+    ? error.message
+    : "Authentication failed. Please try again."
+}
+
+function firebaseErrorCode(error: unknown): string {
+  if (!error) return ""
+  if (typeof error === "string") return error
+  if (typeof error === "object") {
+    const err = error as Record<string, unknown>
+    return String(err.code || err.message || err.toString() || "")
+  }
+  return ""
+}
