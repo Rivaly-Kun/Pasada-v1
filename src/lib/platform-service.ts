@@ -7,7 +7,7 @@ import {
 } from "firebase/database"
 import { normalizeAndValidateBchAddress } from "./bch-wallet"
 import { DEFAULT_FARE_CONFIG } from "./fare"
-import { getScopedFirebase } from "./firebase"
+import { getScopedFirebase, type FirebaseScope } from "./firebase"
 import type { FareConfig, LiveRide } from "./types"
 
 export const PLATFORM_ACCOUNT_ID = "pasada-platform"
@@ -35,8 +35,8 @@ export type PlatformMetrics = {
   bchRides: number
 }
 
-function database() {
-  return getScopedFirebase("passenger").database
+function database(scope: FirebaseScope = "passenger") {
+  return getScopedFirebase(scope).database
 }
 
 import { generateBchWallet } from "./bch-wallet"
@@ -100,28 +100,43 @@ export async function publishPlatformFareConfig(
   config: FareConfig,
 ): Promise<void> {
   const now = Date.now()
-  await update(ref(database()), {
+  const adminUid = getScopedFirebase("admin").auth.currentUser?.uid
+  if (!adminUid)
+    throw new Error("Log in as an administrator before publishing fares.")
+  await update(ref(database("admin")), {
     "platform/fareConfig": config,
     [`platform/fareConfigHistory/${config.version}_${now}`]: {
       ...config,
       publishedAt: now,
     },
     "platform/account/updatedAt": now,
+    [`adminAudit/${now}_fare_${config.version}`]: {
+      action: "fare_config_published",
+      version: config.version,
+      adminUid,
+      createdAt: now,
+    },
   })
 }
 
 export function subscribePlatformAccount(
   onAccount: (account: PlatformAccount | null) => void,
+  scope: FirebaseScope = "passenger",
 ): Unsubscribe {
-  return onValue(ref(database(), "platform/account"), (snapshot) => {
+  return onValue(ref(database(scope), "platform/account"), (snapshot) => {
     onAccount(snapshot.exists() ? snapshot.val() as PlatformAccount : null)
   })
 }
 
 export async function setPlatformBchAddress(value: string): Promise<void> {
   const address = value.trim()
+  const adminUid = getScopedFirebase("admin").auth.currentUser?.uid
+  if (!adminUid)
+    throw new Error(
+      "Log in as an administrator before changing the platform wallet.",
+    )
   if (!address) {
-    await update(ref(database(), "platform/account"), {
+    await update(ref(database("admin"), "platform/account"), {
       bchAddress: null,
       updatedAt: Date.now(),
     })
@@ -129,16 +144,27 @@ export async function setPlatformBchAddress(value: string): Promise<void> {
   }
   const validated = normalizeAndValidateBchAddress(address)
   if (!validated.valid) throw new Error(validated.error)
-  await update(ref(database(), "platform/account"), {
+  if (!validated.address.startsWith("bchtest:")) {
+    throw new Error("PASADA admin accepts Chipnet addresses only (bchtest:).")
+  }
+  const now = Date.now()
+  await update(ref(database("admin"), "platform/account"), {
     bchAddress: validated.address,
-    updatedAt: Date.now(),
+    updatedAt: now,
+  })
+  await update(ref(database("admin"), `adminAudit/${now}_platform_wallet`), {
+    action: "platform_wallet_updated",
+    address: validated.address,
+    adminUid,
+    createdAt: now,
   })
 }
 
 export function subscribePlatformMetrics(
   onMetrics: (metrics: PlatformMetrics) => void,
+  scope: FirebaseScope = "passenger",
 ): Unsubscribe {
-  return onValue(ref(database(), "rides"), (snapshot) => {
+  return onValue(ref(database(scope), "rides"), (snapshot) => {
     const rides = snapshot.exists()
       ? Object.values(snapshot.val() as Record<string, LiveRide>)
       : []

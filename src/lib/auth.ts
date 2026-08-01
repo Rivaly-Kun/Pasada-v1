@@ -236,6 +236,7 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       walletMode: input.walletMode,
       bchPublicKey,
       identityVerification: storedIdentityVerification,
+      accountStatus: "active",
       ...(role === "driver"
         ? {
             plate: input.plate!.trim().toUpperCase(),
@@ -351,6 +352,18 @@ export async function loadPasadaAccount(
   let roleData = (roleSnapshot.val() ??
     nestedProfiles[role]) as Record<string, unknown> | null
   const roles = (userData?.roles ?? {}) as Record<string, boolean>
+  const accountStatus = String(
+    roleData?.accountStatus ?? nestedProfiles[role]?.accountStatus ?? "active",
+  )
+  if (accountStatus === "pending") {
+    throw new Error("This PASADA account is waiting for administrator approval.")
+  }
+  if (accountStatus === "suspended") {
+    throw new Error("This PASADA account has been suspended by an administrator.")
+  }
+  if (accountStatus === "rejected") {
+    throw new Error("This PASADA registration was rejected by an administrator.")
+  }
 
   let wallet = (walletSnapshot.val() ??
     legacyWallet.val()) as Record<string, unknown> | null

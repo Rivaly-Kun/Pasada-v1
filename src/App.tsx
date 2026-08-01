@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import AdminApp from "./apps/admin/AdminApp"
 import DriverApp from "./apps/driver/DriverApp"
 import PassengerApp from "./apps/passenger/PassengerApp"
+import AdminAuthGate from "./components/AdminAuthGate"
 import EscrowFundingCoordinator from "./components/EscrowFundingCoordinator"
 import RoleAuthGate from "./components/RoleAuthGate"
 import { DEFAULT_FARE_CONFIG } from "./lib/fare"
@@ -35,22 +36,22 @@ export default function App() {
 function PasadaDashboard() {
   const [view, setView] = useState<View>("passenger")
   const [fareConfig, setFareConfig] = useState<FareConfig>(DEFAULT_FARE_CONFIG)
+  const contentWidth = view === "admin" ? "max-w-[1600px]" : "max-w-[1240px]"
 
   useEffect(() => {
     void ensurePlatformState().catch(() => undefined)
     return subscribePlatformFareConfig(setFareConfig)
   }, [])
 
-  const publishFareConfig = (config: FareConfig) => {
-    setFareConfig(config)
-    void publishPlatformFareConfig(config).catch(() => undefined)
+  const publishFareConfig = async (config: FareConfig) => {
+    await publishPlatformFareConfig(config)
   }
 
   return (
     <div className="min-h-screen bg-ink-50">
       <EscrowFundingCoordinator />
       <header className="sticky top-0 z-50 border-b border-ink-100 bg-white/85 backdrop-blur">
-        <div className="mx-auto flex max-w-[1240px] flex-wrap items-center gap-x-6 gap-y-3 px-5 py-3">
+        <div className={`mx-auto flex ${contentWidth} flex-wrap items-center gap-x-6 gap-y-3 px-5 py-3`}>
           <div className="flex items-baseline gap-2.5">
             <span className="font-display text-lg font-black tracking-tight">
               PASADA
@@ -85,9 +86,18 @@ function PasadaDashboard() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1240px] px-5 py-8 lg:py-12">
+      <main className={`mx-auto ${contentWidth} px-4 py-8 sm:px-5 lg:px-8 lg:py-12`}>
         {view === "admin" ? (
-          <AdminApp fareConfig={fareConfig} setFareConfig={publishFareConfig} />
+          <AdminAuthGate>
+            {({ user, logout }) => (
+              <AdminApp
+                fareConfig={fareConfig}
+                setFareConfig={publishFareConfig}
+                adminEmail={user.email ?? "Administrator"}
+                onLogout={() => void logout()}
+              />
+            )}
+          </AdminAuthGate>
         ) : (
           <div className="flex justify-center">
             <AppColumn
@@ -115,7 +125,7 @@ function PasadaDashboard() {
         )}
       </main>
 
-      <footer className="mx-auto max-w-[1240px] px-5 pb-10 text-[11px] leading-relaxed text-ink-300">
+      <footer className={`mx-auto ${contentWidth} px-5 pb-10 text-[11px] leading-relaxed text-ink-300`}>
         Prototype. Fare amounts follow Ormoc City Ordinance No. 121, s. 2023,
         but PASADA measures the 2.5 km base distance from the passenger&apos;s
         pickup point rather than the Ormoc City Stage — an adaptation that

@@ -4,6 +4,7 @@ import { browserLocalPersistence, getAuth, setPersistence, type Auth } from 'fir
 import { getDatabase, type Database } from 'firebase/database'
 
 export type AppRole = 'passenger' | 'driver'
+export type FirebaseScope = AppRole | 'admin'
 
 export const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyBuCLl0migQ2zmPqL78pPfIsKWBlflIRXw',
@@ -25,10 +26,10 @@ type RoleFirebase = {
   persistenceReady: Promise<void>
 }
 
-const instances = new Map<AppRole, RoleFirebase>()
+const instances = new Map<FirebaseScope, RoleFirebase>()
 
 /** Each role receives its own named Firebase app and independent saved session. */
-export function getScopedFirebase(role: AppRole): RoleFirebase {
+export function getScopedFirebase(role: FirebaseScope): RoleFirebase {
   const existing = instances.get(role)
   if (existing) return existing
 
