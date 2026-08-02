@@ -46,6 +46,14 @@ export type EscrowDescriptor = {
   fundingSats: number
 }
 
+export type EscrowCouponRedemption = {
+  categoryId: string
+  amount: 1
+  passengerTokenAddress: string
+  redemptionTokenAddress: string
+  tokenDustSats: number
+}
+
 type EscrowParticipants = {
   passengerAddress: string
   passengerPublicKey: string
@@ -143,7 +151,6 @@ function contractFor(
   descriptor: EscrowDescriptor,
   provider = providerFor(descriptor.network),
 ) {
-
   const contract = new Contract(
     PasadaEscrowArtifact,
     [
@@ -288,6 +295,7 @@ export function prepareEscrowDescriptor(
 export async function fundEscrow(
   descriptor: EscrowDescriptor,
   passengerWif: string,
+  coupon?: EscrowCouponRedemption,
 ): Promise<string> {
   const signer = signerForAddress(passengerWif, descriptor.passengerAddress)
   let lastError: unknown
@@ -309,19 +317,71 @@ export async function fundEscrow(
         throw new Error(
           "No spendable BCH UTXOs were found in the passenger wallet.",
         )
+      const plainBchUtxos = utxos.filter((utxo) => !utxo.token)
+      const couponUtxos = coupon
+        ? utxos.filter((utxo) => utxo.token?.category === coupon.categoryId)
+        : []
+      if (coupon) {
+        const availableCoupons = couponUtxos.reduce(
+          (sum, utxo) => sum + Number(utxo.token?.amount ?? 0n),
+          0,
+        )
+        if (availableCoupons < coupon.amount) {
+          throw new Error(
+            "This wallet no longer holds the PRC coupon reserved for the ride.",
+          )
+        }
+        const passengerToken = decodeCashAddress(coupon.passengerTokenAddress)
+        const redemptionToken = decodeCashAddress(coupon.redemptionTokenAddress)
+        if (
+          typeof passengerToken === "string" ||
+          typeof redemptionToken === "string" ||
+          passengerToken.type !== "p2pkhWithTokens" ||
+          redemptionToken.type !== "p2pkhWithTokens" ||
+          passengerToken.prefix !== "bchtest" ||
+          redemptionToken.prefix !== "bchtest"
+        ) {
+          throw new Error(
+            "The PRC redemption addresses are not token-aware Chipnet addresses.",
+          )
+        }
+      }
+      const selectedUtxos = coupon
+        ? [...couponUtxos, ...plainBchUtxos]
+        : plainBchUtxos
+      if (!selectedUtxos.length) {
+        throw new Error(
+          "No spendable BCH UTXOs were found in the passenger wallet.",
+        )
+      }
       const transaction = new TransactionBuilder({
         provider,
         maximumFeeSatoshis: BigInt(10_000),
       })
-        .addInputs(utxos, signer.unlockP2PKH())
+        .addInputs(selectedUtxos, signer.unlockP2PKH())
         .addOutput({
           to: contract.address,
           amount: BigInt(descriptor.fundingSats),
         })
-        .addBchChangeOutputIfNeeded({
-          to: descriptor.passengerAddress,
-          feeRate: 1,
-        })
+      if (coupon) {
+        transaction
+          .addOutput({
+            to: coupon.redemptionTokenAddress,
+            amount: BigInt(coupon.tokenDustSats),
+            token: {
+              category: coupon.categoryId,
+              amount: BigInt(coupon.amount),
+            },
+          })
+          .addTokenChangeOutputIfNeeded({
+            category: coupon.categoryId,
+            to: coupon.passengerTokenAddress,
+          })
+      }
+      transaction.addBchChangeOutputIfNeeded({
+        to: descriptor.passengerAddress,
+        feeRate: 1,
+      })
       return await buildAndBroadcast(transaction, provider)
     } catch (error) {
       lastError = error
@@ -341,12 +401,10 @@ export async function fundEscrow(
     throw new EscrowBroadcastPendingError(
       "The BCH funding broadcast is still being confirmed. PASADA will check the escrow automatically.",
     )
-
   }
   throw lastError instanceof Error
     ? lastError
     : new Error("Unable to fund the BCH escrow.")
-
 }
 
 export async function isEscrowFunded(
@@ -399,7 +457,6 @@ export async function settleEscrow(
   throw lastError instanceof Error
     ? lastError
     : new Error("Unable to settle the BCH escrow.")
-
 }
 
 export async function refundEscrow(
@@ -444,5 +501,4 @@ export async function refundEscrow(
   throw lastError instanceof Error
     ? lastError
     : new Error("Unable to refund the BCH escrow.")
-
 }

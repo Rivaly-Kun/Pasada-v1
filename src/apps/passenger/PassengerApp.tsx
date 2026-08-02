@@ -44,6 +44,11 @@ import {
 import { setChatPresence } from "../../lib/chat-service"
 import { ESCROW_FUNDING_FEE_RESERVE_SATS } from "../../lib/bch-escrow"
 import {
+  PRC_TOKEN_DUST_SATS,
+  fetchCashTokenWalletSnapshot,
+  subscribeCashTokenHub,
+} from "../../lib/cashtoken-service"
+import {
   cancelRide,
   createRide,
   submitDriverRating,
@@ -53,6 +58,7 @@ import {
 } from "../../lib/ride-service"
 import type {
   DiscountClass,
+  CashTokenConfig,
   FareConfig,
   LiveDriver,
   LiveRide,
@@ -84,6 +90,12 @@ export default function PassengerApp({
   const [rideHistory, setRideHistory] = useState<LiveRide[]>([])
   const [serviceError, setServiceError] = useState("")
   const [walletMessage, setWalletMessage] = useState("")
+  const [prcConfig, setPrcConfig] = useState<CashTokenConfig | null>(null)
+  const [prcBalance, setPrcBalance] = useState(0)
+  const [prcMessage, setPrcMessage] = useState(
+    "PRC has not been initialized yet.",
+  )
+  const [usePrcCoupon, setUsePrcCoupon] = useState(false)
   const [locating, setLocating] = useState(false)
   const [profile, setProfile] = useState({
     displayName: account.displayName,
@@ -156,6 +168,8 @@ export default function PassengerApp({
         discountedSeats,
         specialTrip,
         nightTrip,
+        couponDiscountPhp:
+          usePrcCoupon && prcConfig ? prcConfig.couponValuePhp : 0,
       }),
     [
       activeConfig,
@@ -164,6 +178,8 @@ export default function PassengerApp({
       discountedSeats,
       specialTrip,
       nightTrip,
+      usePrcCoupon,
+      prcConfig,
     ],
   )
 
@@ -201,13 +217,60 @@ export default function PassengerApp({
         account.uid,
         account.bchAddress,
       )
-      setWalletMessage("Live BCH balance saved to PASADA Realtime Database.")
+      if (prcConfig) {
+        const tokenWallet = await fetchCashTokenWalletSnapshot(
+          account.bchAddress,
+          prcConfig.categoryId,
+        )
+        setPrcBalance(tokenWallet.tokenBalance)
+        setPrcMessage(`${tokenWallet.tokenBalance} PRC confirmed on Chipnet.`)
+      }
+      setWalletMessage("Live BCH and PRC balances refreshed from Chipnet.")
     } catch {
       setWalletMessage(
         "Could not reach the BCH balance service. Showing the last saved balance.",
       )
     }
   }
+
+  useEffect(
+    () =>
+      subscribeCashTokenHub((state) => setPrcConfig(state.config), "passenger"),
+    [],
+  )
+
+  useEffect(() => {
+    if (!prcConfig) {
+      setPrcBalance(0)
+      setPrcMessage("PRC has not been initialized yet.")
+      return
+    }
+    let active = true
+    const refresh = () => {
+      void fetchCashTokenWalletSnapshot(
+        account.bchAddress,
+        prcConfig.categoryId,
+      )
+        .then((snapshot) => {
+          if (!active) return
+          setPrcBalance(snapshot.tokenBalance)
+          setPrcMessage(`${snapshot.tokenBalance} PRC confirmed on Chipnet.`)
+        })
+        .catch(() => {
+          if (active) setPrcMessage("PRC balance is temporarily unavailable.")
+        })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 15_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [account.bchAddress, prcConfig?.categoryId])
+
+  useEffect(() => {
+    if (!locked && (!prcConfig || prcBalance < 1)) setUsePrcCoupon(false)
+  }, [locked, prcBalance, prcConfig])
 
   // Ride simulation: searching → accepted, then the driver closes on the pickup.
   useEffect(() => {
@@ -244,7 +307,9 @@ export default function PassengerApp({
   useEffect(() => {
     void setChatPresence("passenger", account.uid, true).catch(() => undefined)
     return () => {
-      void setChatPresence("passenger", account.uid, false).catch(() => undefined)
+      void setChatPresence("passenger", account.uid, false).catch(
+        () => undefined,
+      )
     }
   }, [account.uid])
 
@@ -281,6 +346,19 @@ export default function PassengerApp({
         platformFee: breakdown.platformFee,
         platformTax: breakdown.platformTax,
         config: activeConfig,
+        ...(usePrcCoupon && prcConfig
+          ? {
+              appliedCoupon: {
+                symbol: "PRC" as const,
+                categoryId: prcConfig.categoryId,
+                amount: 1 as const,
+                discountPhp: prcConfig.couponValuePhp,
+                passengerTokenAddress: account.chipnetTokenAddress,
+                redemptionTokenAddress: prcConfig.redemptionTokenAddress,
+                status: "reserved" as const,
+              },
+            }
+          : {}),
       })
       setRideId(nextRideId)
       setStatus("searching")
@@ -415,6 +493,10 @@ export default function PassengerApp({
           nightTrip={nightTrip}
           setNightTrip={setNightTrip}
           breakdown={breakdown}
+          prcConfig={prcConfig}
+          prcBalance={prcBalance}
+          usePrcCoupon={usePrcCoupon}
+          setUsePrcCoupon={setUsePrcCoupon}
           balanceSats={balanceSats}
           locating={locating}
           onCurrentLocation={() => void useCurrentLocation()}
@@ -463,12 +545,19 @@ export default function PassengerApp({
           address={account.bchAddress}
           quoteSource={bchPhpQuote.source}
           walletMessage={walletMessage}
+          prcConfig={prcConfig}
+          prcBalance={prcBalance}
+          prcMessage={prcMessage}
+          tokenAddress={account.chipnetTokenAddress}
           onSync={() => void syncWallet()}
           onSent={() => void syncWallet()}
         />
       )}
       {tab === "activity" && !onRide && status !== "quoting" && (
-        <ActivityScreen rides={rideHistory} onSelectReceipt={setSelectedReceipt} />
+        <ActivityScreen
+          rides={rideHistory}
+          onSelectReceipt={setSelectedReceipt}
+        />
       )}
       {tab === "settings" && !onRide && status !== "quoting" && (
         <SettingsScreen
@@ -571,7 +660,7 @@ function HomeScreen({
                   : "Configured PHP estimate"}
               </p>
               <p className="num mt-1.5 text-[11px] text-white/50">
-                {formatBchFromSats(balanceSats)} BCH Â·{" "}
+                {formatBchFromSats(balanceSats)} BCH ·{" "}
                 {balanceSats.toLocaleString()} sats
               </p>
             </div>
@@ -710,6 +799,10 @@ type BookingProps = {
   nightTrip: boolean
   setNightTrip: (v: boolean) => void
   breakdown: ReturnType<typeof calculateFare>
+  prcConfig: CashTokenConfig | null
+  prcBalance: number
+  usePrcCoupon: boolean
+  setUsePrcCoupon: (value: boolean) => void
   balanceSats: number
   locating: boolean
   onCurrentLocation: () => void
@@ -722,12 +815,13 @@ type BookingProps = {
 function BookingScreen(p: BookingProps) {
   const requiredSats =
     toSatoshis(p.breakdown.total, p.breakdown.config) +
-    ESCROW_FUNDING_FEE_RESERVE_SATS * 2
+    ESCROW_FUNDING_FEE_RESERVE_SATS * 2 +
+    (p.usePrcCoupon ? PRC_TOKEN_DUST_SATS : 0)
   const insufficient = p.balanceSats < requiredSats
   // While picking, the sheet collapses to a bar so the map is fully tappable.
   const [picking, setPicking] = useState(false)
   const [sheetHeight, setSheetHeight] = useState(78)
-  const drag = useRef<{ startY: number; startHeight: number } | null>(null)
+  const drag = useRef<{ startY: number startHeight: number } | null>(null)
 
   const startDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -977,6 +1071,54 @@ function BookingScreen(p: BookingProps) {
               label="Night trip (9PM – 5AM)"
             />
           </div>
+
+          {p.prcConfig && (
+            <div
+              className={`rounded-xl border p-4 ${
+                p.usePrcCoupon
+                  ? "border-pasada-blue bg-pasada-blue/6"
+                  : "border-ink-100 bg-white"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-pasada-blue px-2 py-0.5 font-mono text-[9px] font-bold text-white">
+                      PRC
+                    </span>
+                    <p className="font-display text-[13px] font-bold">
+                      Use 1 PRC coupon
+                    </p>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-relaxed text-ink-500">
+                    Save {formatPeso(p.prcConfig.couponValuePhp * 100)} on this
+                    ride. You hold {p.prcBalance} PRC.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={p.prcBalance < 1}
+                  aria-pressed={p.usePrcCoupon}
+                  onClick={() => p.setUsePrcCoupon(!p.usePrcCoupon)}
+                  className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                    p.usePrcCoupon ? "bg-pasada-blue" : "bg-ink-100"
+                  } ${p.prcBalance < 1 ? "cursor-not-allowed opacity-40" : ""}`}
+                >
+                  <span
+                    className={`absolute top-1 left-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      p.usePrcCoupon ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+              {p.prcBalance < 1 && (
+                <p className="mt-2 text-[10px] text-ink-300">
+                  Earn PRC when a new passenger registers with your referral
+                  code and PASADA issues the queued coupon.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Payment */}
           <div>
@@ -1295,7 +1437,9 @@ function RideScreen({
                 className="mt-3 flex items-center justify-between gap-3 rounded-lg text-[11px] text-pasada-blue hover:underline"
               >
                 <span>View settlement on Chipnet explorer</span>
-                <span className="num truncate">{settlementTxid.slice(-12)}</span>
+                <span className="num truncate">
+                  {settlementTxid.slice(-12)}
+                </span>
               </a>
             ) : (
               <p className="mt-3 text-[11px] text-ink-500">Settled on-chain</p>
@@ -1372,6 +1516,10 @@ function PayScreen({
   address,
   quoteSource,
   walletMessage,
+  prcConfig,
+  prcBalance,
+  prcMessage,
+  tokenAddress,
   onSync,
   onSent,
 }: {
@@ -1380,6 +1528,10 @@ function PayScreen({
   address: string
   quoteSource: "CoinGecko" | "Configured fallback"
   walletMessage: string
+  prcConfig: CashTokenConfig | null
+  prcBalance: number
+  prcMessage: string
+  tokenAddress: string
   onSync: () => void
   onSent: () => void
 }) {
@@ -1405,12 +1557,34 @@ function PayScreen({
             : "Configured PHP estimate"}
         </p>
         <p className="num mt-1 text-[11px] text-white/50">
-          {formatBchFromSats(balanceSats)} BCH Â· {balanceSats.toLocaleString()}{" "}
+          {formatBchFromSats(balanceSats)} BCH · {balanceSats.toLocaleString()}{" "}
           sats
         </p>
         <p className="num mt-4 text-[10px] break-all text-white/40">
           {address}
         </p>
+      </div>
+      <div className="mt-4 overflow-hidden rounded-2xl bg-gradient-to-br from-pasada-blue to-[#2347a8] p-5 text-white shadow-lg shadow-pasada-blue/15">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="font-mono text-[9px] tracking-[0.15em] text-white/55 uppercase">
+              PASADA Referral Credit
+            </p>
+            <p className="num mt-2 text-3xl font-medium">{prcBalance} PRC</p>
+          </div>
+          <span className="rounded-full bg-white/15 px-2.5 py-1 font-mono text-[8px] font-bold tracking-[0.1em]">
+            CHIPNET TOKEN
+          </span>
+        </div>
+        <p className="mt-2 text-[10px] text-white/65">
+          {prcConfig
+            ? `Each PRC saves ₱${prcConfig.couponValuePhp} on one ride.`
+            : "Token launch is waiting for the PASADA administrator."}
+        </p>
+        <p className="num mt-3 break-all border-t border-white/15 pt-3 text-[9px] text-white/45">
+          {tokenAddress}
+        </p>
+        <p className="mt-2 text-[9px] text-white/55">{prcMessage}</p>
       </div>
       <BchSendCard
         senderAddress={address}
@@ -1423,7 +1597,9 @@ function PayScreen({
         <div className="mt-4 flex flex-col items-center rounded-3xl border border-ink-100 bg-white p-5 text-center shadow-md">
           <div className="flex items-center gap-2">
             <span className="flex items-center gap-1.5 rounded-full bg-[#0AC18E]/10 px-3 py-1 font-mono text-[11px] font-bold text-[#0AC18E]">
-              <span className="grid h-4 w-4 place-items-center rounded-full bg-[#0AC18E] text-[10px] text-white">₿</span>
+              <span className="grid h-4 w-4 place-items-center rounded-full bg-[#0AC18E] text-[10px] text-white">
+                ₿
+              </span>
               BCH
             </span>
             <span className="rounded-full bg-ink-100 px-2.5 py-0.5 font-mono text-[10px] font-semibold text-ink-500 uppercase">
@@ -1516,6 +1692,11 @@ function ActivityScreen({
               <Pill tone="outline">BCH escrow</Pill>
               <Pill tone="outline">{r.distanceKm} km</Pill>
               <Pill tone="outline">rates {r.config.version}</Pill>
+              {r.appliedCoupon && (
+                <Pill tone="blue">
+                  PRC · ₱{r.appliedCoupon.discountPhp} off
+                </Pill>
+              )}
               <span className="ml-auto text-[10px] text-ink-300">
                 {new Date(r.createdAt).toLocaleString()}
               </span>
@@ -1544,15 +1725,21 @@ function SettingsScreen({
   onProfileSaved,
 }: {
   account: PasadaAccount
-  onProfileSaved: (profile: { displayName: string; avatarDataUrl?: string }) => void
+  onProfileSaved: (profile: {
+    displayName: string
+    avatarDataUrl?: string
+  }) => void
 }) {
   const [name, setName] = useState(account.displayName || "PASADA passenger")
   const [avatarDataUrl, setAvatarDataUrl] = useState(account.avatarDataUrl)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState("")
   const [darkMode, setDarkMode] = useState(
-    () => typeof window !== "undefined" && localStorage.getItem("pasada_theme") === "dark",
+    () =>
+      typeof window !== "undefined" &&
+      localStorage.getItem("pasada_theme") === "dark",
   )
+  const [referralShared, setReferralShared] = useState(false)
   const avatarInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -1576,7 +1763,9 @@ function SettingsScreen({
       onProfileSaved({ displayName: name.trim(), avatarDataUrl })
       setMessage("Profile saved. Your rider details are now up to date.")
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Profile could not be saved.")
+      setMessage(
+        error instanceof Error ? error.message : "Profile could not be saved.",
+      )
     } finally {
       setSaving(false)
     }
@@ -1591,6 +1780,20 @@ function SettingsScreen({
     const reader = new FileReader()
     reader.onload = () => setAvatarDataUrl(String(reader.result))
     reader.readAsDataURL(file)
+  }
+
+  const shareReferral = async () => {
+    if (!account.referralCode) return
+    const text = `Ride with PASADA and use my referral code ${account.referralCode}. Once you register, PASADA can issue me a 1 PRC ride coupon.`
+    if (navigator.share) {
+      await navigator
+        .share({ title: "PASADA referral", text })
+        .catch(() => undefined)
+    } else {
+      await navigator.clipboard.writeText(account.referralCode)
+    }
+    setReferralShared(true)
+    window.setTimeout(() => setReferralShared(false), 1600)
   }
 
   const initials =
@@ -1612,11 +1815,17 @@ function SettingsScreen({
           aria-label="Choose profile photo"
         >
           {avatarDataUrl ? (
-            <img src={avatarDataUrl} alt="Profile" className="h-full w-full object-cover" />
+            <img
+              src={avatarDataUrl}
+              alt="Profile"
+              className="h-full w-full object-cover"
+            />
           ) : (
             initials
           )}
-          <span className="absolute inset-x-0 bottom-0 bg-ink/65 py-0.5 text-center text-[8px]">Edit</span>
+          <span className="absolute inset-x-0 bottom-0 bg-ink/65 py-0.5 text-center text-[8px]">
+            Edit
+          </span>
         </button>
         <div>
           <p className="font-display text-[15px] font-bold">{name}</p>
@@ -1636,14 +1845,20 @@ function SettingsScreen({
 
       <div className="mt-3 rounded-xl bg-white p-4">
         <SectionLabel>Editable profile</SectionLabel>
-        <label className="mt-3 block text-[11px] font-semibold text-ink-500">Display name</label>
+        <label className="mt-3 block text-[11px] font-semibold text-ink-500">
+          Display name
+        </label>
         <input
           value={name}
           onChange={(event) => setName(event.target.value)}
           maxLength={50}
           className="mt-1.5 w-full rounded-xl bg-ink-50 px-3 py-3 text-[13px] outline-none ring-1 ring-ink-100 focus:ring-pasada-blue"
         />
-        <button type="button" onClick={() => avatarInput.current?.click()} className="mt-3 text-[11px] font-bold text-pasada-blue">
+        <button
+          type="button"
+          onClick={() => avatarInput.current?.click()}
+          className="mt-3 text-[11px] font-bold text-pasada-blue"
+        >
           {avatarDataUrl ? "Change profile photo" : "Add profile photo"}
         </button>
         <div className="mt-3">
@@ -1652,7 +1867,13 @@ function SettingsScreen({
           </Button>
         </div>
         {message && (
-          <p className={`mt-2 text-[10px] ${message.startsWith("Profile saved") ? "text-[#0a9d72]" : "text-pasada-red"}`}>
+          <p
+            className={`mt-2 text-[10px] ${
+              message.startsWith("Profile saved")
+                ? "text-[#0a9d72]"
+                : "text-pasada-red"
+            }`}
+          >
             {message}
           </p>
         )}
@@ -1664,29 +1885,71 @@ function SettingsScreen({
           {account?.bchAddress || "Connecting wallet..."}
         </p>
         <p className="mt-2 text-[11px] text-ink-300">
-          This public address is used to display your balance and receive BCH. {" "}
+          This public address is used to display your balance and receive BCH.{" "}
           The in-app wallet key remains in this browser only.
         </p>
       </div>
+
+      {account.referralCode && (
+        <div className="mt-3 overflow-hidden rounded-xl bg-ink p-4 text-white">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[9px] tracking-[0.14em] text-white/40 uppercase">
+                Your referral code
+              </p>
+              <p className="num mt-1 text-[20px] font-medium tracking-wide">
+                {account.referralCode}
+              </p>
+            </div>
+            <span className="rounded-full bg-pasada-blue px-2 py-1 font-mono text-[8px] font-bold">
+              +1 PRC
+            </span>
+          </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-white/50">
+            When a new passenger registers with your code, PASADA places your 1
+            PRC coupon entitlement in the admin issue queue.
+          </p>
+          <button
+            type="button"
+            onClick={() => void shareReferral()}
+            className="mt-3 w-full rounded-lg bg-white py-2.5 font-display text-[11px] font-bold text-ink"
+          >
+            {referralShared ? "Referral code ready" : "Share referral code"}
+          </button>
+        </div>
+      )}
 
       <div className="mt-3 rounded-xl bg-white px-4">
         <div className="flex items-center justify-between gap-4 py-3.5">
           <div>
             <p className="text-[13px] font-semibold text-ink-700">Dark mode</p>
-            <p className="mt-0.5 text-[10px] text-ink-500">Use a low-light interface for evening trips.</p>
+            <p className="mt-0.5 text-[10px] text-ink-500">
+              Use a low-light interface for evening trips.
+            </p>
           </div>
           <button
             type="button"
             onClick={() => setDarkMode((value) => !value)}
             aria-pressed={darkMode}
-            className={`relative h-7 w-12 shrink-0 overflow-hidden rounded-full transition-colors ${darkMode ? "bg-pasada-blue" : "bg-ink-100"}`}
+            className={`relative h-7 w-12 shrink-0 overflow-hidden rounded-full transition-colors ${
+              darkMode ? "bg-pasada-blue" : "bg-ink-100"
+            }`}
           >
-            <span className={`absolute top-1 left-1 h-5 w-5 rounded-full bg-[#ffffff] shadow transition-transform ${darkMode ? "translate-x-5" : "translate-x-0"}`} />
+            <span
+              className={`absolute top-1 left-1 h-5 w-5 rounded-full bg-[#ffffff] shadow transition-transform ${
+                darkMode ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
           </button>
         </div>
         <div className="border-t border-ink-100 py-3.5">
-          <p className="text-[13px] font-semibold text-ink-700">Ride messages</p>
-          <p className="mt-0.5 text-[10px] text-ink-500">Former drivers appear in Messages after a completed or cancelled ride.</p>
+          <p className="text-[13px] font-semibold text-ink-700">
+            Ride messages
+          </p>
+          <p className="mt-0.5 text-[10px] text-ink-500">
+            Former drivers appear in Messages after a completed or cancelled
+            ride.
+          </p>
         </div>
       </div>
 

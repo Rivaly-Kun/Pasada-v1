@@ -1,4 +1,4 @@
-import type { FareBreakdown, FareConfig, FareInput, FareLine } from './types'
+import type { FareBreakdown, FareConfig, FareInput, FareLine } from "./types"
 
 /** All money in this module is integer centavos — never floats. */
 export const PESO = 100
@@ -6,8 +6,8 @@ export const PESO = 100
 export const DEFAULT_PHP_PER_BCH_CENTAVOS = 12_749 * PESO
 
 export const DEFAULT_FARE_CONFIG: FareConfig = {
-  version: 'v5',
-  effective: '2026-08-02',
+  version: "v5",
+  effective: "2026-08-02",
   seatCapacity: 6,
   baseDistanceKm: 2.5,
   baseFarePerSeat: 10 * PESO,
@@ -26,11 +26,11 @@ export const DEFAULT_FARE_CONFIG: FareConfig = {
 }
 
 export function formatPeso(centavos: number): string {
-  const sign = centavos < 0 ? '-' : ''
+  const sign = centavos < 0 ? "-" : ""
   const abs = Math.abs(centavos)
   const whole = Math.floor(abs / PESO)
-  const frac = String(abs % PESO).padStart(2, '0')
-  return `${sign}₱${whole.toLocaleString('en-PH')}.${frac}`
+  const frac = String(abs % PESO).padStart(2, "0")
+  return `${sign}₱${whole.toLocaleString("en-PH")}.${frac}`
 }
 
 export function isNightHour(config: FareConfig, date = new Date()): boolean {
@@ -38,22 +38,31 @@ export function isNightHour(config: FareConfig, date = new Date()): boolean {
   return h >= config.nightStartHour || h < config.nightEndHour
 }
 
-function satoshiRate(config?: Pick<FareConfig, 'phpPerBchCentavos'>) {
-  return Math.max(1, Math.trunc(config?.phpPerBchCentavos ?? DEFAULT_PHP_PER_BCH_CENTAVOS))
+function satoshiRate(config?: Pick<FareConfig, "phpPerBchCentavos">) {
+  return Math.max(
+    1,
+    Math.trunc(config?.phpPerBchCentavos ?? DEFAULT_PHP_PER_BCH_CENTAVOS),
+  )
 }
 
 /** Integer conversion: centavos / rate-centavos BCH, rounded to the nearest satoshi. */
-export function toSatoshis(centavos: number, config?: Pick<FareConfig, 'phpPerBchCentavos'>): number {
+export function toSatoshis(
+  centavos: number,
+  config?: Pick<FareConfig, "phpPerBchCentavos">,
+): number {
   return Math.round((Math.trunc(centavos) * 100_000_000) / satoshiRate(config))
 }
 
-export function toBch(centavos: number, config?: Pick<FareConfig, 'phpPerBchCentavos'>): string {
+export function toBch(
+  centavos: number,
+  config?: Pick<FareConfig, "phpPerBchCentavos">,
+): string {
   return (toSatoshis(centavos, config) / 100_000_000).toFixed(8)
 }
 
 export function satoshisToCentavos(
   satoshis: number,
-  config?: Pick<FareConfig, 'phpPerBchCentavos'>,
+  config?: Pick<FareConfig, "phpPerBchCentavos">,
 ): number {
   return Math.round((Math.trunc(satoshis) * satoshiRate(config)) / 100_000_000)
 }
@@ -67,18 +76,31 @@ export function formatBchFromSats(satoshis: number): string {
  * buyout model. The declared passenger count is never a fare multiplier — the
  * fixed six-seat capacity is.
  */
-export function calculateFare(config: FareConfig, input: FareInput): FareBreakdown {
-  const extraDistanceKm = Math.max(0, input.tripDistanceKm - config.baseDistanceKm)
+export function calculateFare(
+  config: FareConfig,
+  input: FareInput,
+): FareBreakdown {
+  const extraDistanceKm = Math.max(
+    0,
+    input.tripDistanceKm - config.baseDistanceKm,
+  )
   const chargeableExtraKm = Math.ceil(extraDistanceKm)
 
   const farePerSeat =
-    config.baseFarePerSeat + chargeableExtraKm * config.additionalFarePerKmPerSeat
+    config.baseFarePerSeat +
+    chargeableExtraKm * config.additionalFarePerKmPerSeat
 
   const eligible = config.discountsEnabled
-    ? Math.min(input.discountedSeats, config.maxDiscountedSeats, config.seatCapacity)
+    ? Math.min(
+        input.discountedSeats,
+        config.maxDiscountedSeats,
+        config.seatCapacity,
+      )
     : 0
   const regularSeats = config.seatCapacity - eligible
-  const discountedSeatFare = Math.round(farePerSeat * (1 - config.discountPercent / 100))
+  const discountedSeatFare = Math.round(
+    farePerSeat * (1 - config.discountPercent / 100),
+  )
 
   const fullVehicleFare = farePerSeat * config.seatCapacity
   const vehicleFare = regularSeats * farePerSeat + eligible * discountedSeatFare
@@ -98,62 +120,87 @@ export function calculateFare(config: FareConfig, input: FareInput): FareBreakdo
   const platformTaxBps = Math.max(0, Number(config.platformTaxBps ?? 0))
   const platformTax = Math.round((transportationFare * platformTaxBps) / 10_000)
   const platformFee = config.pasadaUpfrontFee + platformTax
-  const total = transportationFare + platformFee
+  const grossTotal = transportationFare + platformFee
+  const requestedCouponDiscount = Math.max(
+    0,
+    Math.round(Number(input.couponDiscountPhp ?? 0) * PESO),
+  )
+  // PRC is a fixed marketing discount. Keep the platform output intact so the
+  // coupon is deducted from the transportation portion used for driver payout.
+  const couponDiscount = Math.min(
+    requestedCouponDiscount,
+    Math.max(0, transportationFare),
+  )
+  const netTransportationFare = transportationFare - couponDiscount
+  const total = grossTotal - couponDiscount
 
   const lines: FareLine[] = [
     {
-      label: 'Base tricycle fare',
+      label: "Base tricycle fare",
       detail: `First ${config.baseDistanceKm} km · ${formatPeso(config.baseFarePerSeat)}/seat`,
       amount: config.baseFarePerSeat,
-      tone: 'muted',
+      tone: "muted",
     },
     {
-      label: 'Additional distance',
+      label: "Additional distance",
       detail:
         chargeableExtraKm > 0
           ? `${chargeableExtraKm} succeeding km × ${formatPeso(config.additionalFarePerKmPerSeat)}/seat`
-          : 'Within base distance',
+          : "Within base distance",
       amount: chargeableExtraKm * config.additionalFarePerKmPerSeat,
-      tone: 'muted',
+      tone: "muted",
     },
     {
-      label: 'Fare per seat',
+      label: "Fare per seat",
       detail: `${formatPeso(farePerSeat)} × ${config.seatCapacity} billable seats`,
       amount: fullVehicleFare,
     },
   ]
 
   if (specialFee > 0) {
-    lines.push({ label: 'Special-trip surcharge', detail: 'Off usual route', amount: specialFee })
+    lines.push({
+      label: "Special-trip surcharge",
+      detail: "Off usual route",
+      amount: specialFee,
+    })
   }
   if (nightFee > 0) {
     lines.push({
-      label: 'Night-trip surcharge',
+      label: "Night-trip surcharge",
       detail: `${config.nightStartHour % 12 || 12}:00 PM – ${config.nightEndHour}:00 AM`,
       amount: nightFee,
     })
   }
   if (discount < 0) {
     lines.push({
-      label: 'Verified passenger discount',
+      label: "Verified passenger discount",
       detail: `${eligible} of ${config.seatCapacity} seats at ${config.discountPercent}% off`,
       amount: discount,
-      tone: 'credit',
+      tone: "credit",
+    })
+  }
+
+  if (couponDiscount > 0) {
+    lines.push({
+      label: "PRC ride coupon",
+      detail: "1 PASADA Referral Credit redeemed on Chipnet",
+      amount: -couponDiscount,
+      tone: "credit",
     })
   }
 
   lines.push({
-    label: 'PASADA upfront fee',
-    detail: 'Platform fee — billed separately from the driver fare',
+    label: "PASADA upfront fee",
+    detail: "Platform fee — billed separately from the driver fare",
     amount: config.pasadaUpfrontFee,
-    tone: 'platform',
+    tone: "platform",
   })
   if (platformTax > 0) {
     lines.push({
-      label: 'Platform tax',
+      label: "Platform tax",
       detail: `${(platformTaxBps / 100).toFixed(2)}% of transportation fare`,
       amount: platformTax,
-      tone: 'platform',
+      tone: "platform",
     })
   }
 
@@ -165,10 +212,12 @@ export function calculateFare(config: FareConfig, input: FareInput): FareBreakdo
     vehicleFare: fullVehicleFare + discount,
     surcharges,
     discount,
-    transportationFare,
+    transportationFare: netTransportationFare,
     fixedPlatformFee: config.pasadaUpfrontFee,
     platformTax,
     platformFee,
+    grossTotal,
+    couponDiscount,
     total,
     lines,
   }

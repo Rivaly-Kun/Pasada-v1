@@ -22,6 +22,10 @@ import {
   settleEscrow,
 } from "./bch-escrow"
 import { validatePrivateKeyForBchAddress } from "./bch-wallet"
+import {
+  PRC_TOKEN_DUST_SATS,
+  recordCouponRedemption,
+} from "./cashtoken-service"
 import { DEMO_DRIVER_START, distanceKm, interpolatePoint } from "./geo"
 import { ensurePlatformState, PLATFORM_ACCOUNT_ID } from "./platform-service"
 import type {
@@ -85,6 +89,7 @@ type RideInput = {
   platformFee: number
   platformTax: number
   config: FareConfig
+  appliedCoupon?: LiveRide["appliedCoupon"]
   demoMode?: boolean
   demoDriver?: DriverSeed
   demoDriverAccount?: PasadaAccount
@@ -122,7 +127,7 @@ async function linkedWalletWif(
 }
 
 async function refreshChainWallets(
-  wallets: Array<{ role: "passenger" | "driver"; uid: string; address: string }>,
+  wallets: Array<{ role: "passenger" | "driver" uid: string address: string }>,
 ) {
   const { refreshPasadaWalletBalance } = await import("./auth")
   await Promise.allSettled(
@@ -296,7 +301,10 @@ export async function createRide(input: RideInput): Promise<string> {
     toSatoshis(input.platformTax, input.config),
   )
   const driverPayoutSats = transportationFareSats
-  const requiredSats = fareSats + ESCROW_FUNDING_FEE_RESERVE_SATS * 2
+  const requiredSats =
+    fareSats +
+    ESCROW_FUNDING_FEE_RESERVE_SATS * 2 +
+    (input.appliedCoupon ? PRC_TOKEN_DUST_SATS : 0)
   let passengerPublicKey = input.passenger.bchPublicKey
 
   if (!input.demoMode) {
@@ -353,6 +361,12 @@ export async function createRide(input: RideInput): Promise<string> {
     driverPayoutSats,
     platformAccountId: PLATFORM_ACCOUNT_ID,
     platformBchAddress: platformAccount?.bchAddress ?? null,
+    ...(input.appliedCoupon
+      ? {
+          appliedCoupon: input.appliedCoupon,
+          discountPhp: input.appliedCoupon.discountPhp,
+        }
+      : {}),
     total: input.total,
     platformFee: input.platformFee,
     config: input.config,
@@ -511,7 +525,6 @@ export async function acceptRide(
   }
   const reservation = await retryFirebaseTransaction(() =>
     runTransaction(ref(db, `rides/${rideId}`), (ride: LiveRide | null) => {
-
       const retryingFailedFunding =
         ride?.status === "funding" && ride.paymentStatus === "failed"
       if (
@@ -560,8 +573,7 @@ export async function acceptRide(
     }
     if (
       latestRide.status === "funding" &&
-      (latestRide.escrow ||
-        latestRide.paymentStatus === "funding_broadcasting")
+      (latestRide.escrow || latestRide.paymentStatus === "funding_broadcasting")
     ) {
       // The accepted transaction may have reached Firebase just before this
       // client lost its acknowledgement. It is already being funded.
@@ -701,7 +713,19 @@ export async function fundRideEscrow(
       passengerId,
       escrow.passengerAddress,
     )
-    fundingTxid = await fundEscrow(escrow, passengerWif)
+    fundingTxid = await fundEscrow(
+      escrow,
+      passengerWif,
+      ride.appliedCoupon
+        ? {
+            categoryId: ride.appliedCoupon.categoryId,
+            amount: 1,
+            passengerTokenAddress: ride.appliedCoupon.passengerTokenAddress,
+            redemptionTokenAddress: ride.appliedCoupon.redemptionTokenAddress,
+            tokenDustSats: PRC_TOKEN_DUST_SATS,
+          }
+        : undefined,
+    )
     const fundedAt = Date.now()
     const funded = await retryFirebaseTransaction(() =>
       runTransaction(ref(db, `rides/${rideId}`), (current: LiveRide | null) => {
@@ -718,6 +742,15 @@ export async function fundRideEscrow(
           paymentStatus: "funded",
           acceptedAt: fundedAt,
           escrow: { ...escrow, fundingTxid },
+          ...(current.appliedCoupon
+            ? {
+                appliedCoupon: {
+                  ...current.appliedCoupon,
+                  status: "redeemed" as const,
+                  redemptionTxid: fundingTxid,
+                },
+              }
+            : {}),
           updatedAt: fundedAt,
         }
       }),
@@ -730,6 +763,15 @@ export async function fundRideEscrow(
         paymentStatus: "funded",
         acceptedAt: fundedAt,
         escrow: { ...escrow, fundingTxid },
+        ...(ride.appliedCoupon
+          ? {
+              appliedCoupon: {
+                ...ride.appliedCoupon,
+                status: "redeemed",
+                redemptionTxid: fundingTxid,
+              },
+            }
+          : {}),
         updatedAt: fundedAt,
       })
     }
@@ -741,6 +783,14 @@ export async function fundRideEscrow(
         "accepted"
     }
     await update(ref(db), statusWrites)
+    if (ride.appliedCoupon && fundingTxid) {
+      void recordCouponRedemption({
+        rideId,
+        passengerId,
+        passengerName: ride.passengerName,
+        txid: fundingTxid,
+      }).catch(() => undefined)
+    }
     void refreshChainWallets([
       {
         role: "passenger",
@@ -758,8 +808,25 @@ export async function fundRideEscrow(
         paymentStatus: "funded",
         [`escrow/fundingTxid`]: fundingTxid,
         [`escrow/error`]: message,
+        ...(ride.appliedCoupon
+          ? {
+              appliedCoupon: {
+                ...ride.appliedCoupon,
+                status: "redeemed",
+                redemptionTxid: fundingTxid,
+              },
+            }
+          : {}),
         updatedAt: Date.now(),
       })
+      if (ride.appliedCoupon) {
+        void recordCouponRedemption({
+          rideId,
+          passengerId,
+          passengerName: ride.passengerName,
+          txid: fundingTxid,
+        }).catch(() => undefined)
+      }
       return true
     }
     if (error instanceof EscrowBroadcastPendingError) {
@@ -867,6 +934,15 @@ export async function reconcileEscrowFunding(
         paymentStatus: "funded",
         acceptedAt: current.acceptedAt ?? fundedAt,
         escrow: { ...current.escrow, fundingTxid, error: null },
+        ...(current.appliedCoupon
+          ? {
+              appliedCoupon: {
+                ...current.appliedCoupon,
+                status: "redeemed" as const,
+                redemptionTxid: fundingTxid,
+              },
+            }
+          : {}),
         updatedAt: fundedAt,
       }
     }),
@@ -883,6 +959,14 @@ export async function reconcileEscrowFunding(
       "accepted"
   }
   await update(ref(db), statusWrites)
+  if (ride.appliedCoupon) {
+    void recordCouponRedemption({
+      rideId,
+      passengerId,
+      passengerName: ride.passengerName,
+      txid: fundingTxid,
+    }).catch(() => undefined)
+  }
   void refreshChainWallets([
     {
       role: "passenger",
@@ -922,10 +1006,27 @@ export async function retryEscrowFunding(
         [`rides/${rideId}/acceptedAt`]: now,
         [`rides/${rideId}/escrow/fundingTxid`]: fundingTxid,
         [`rides/${rideId}/escrow/error`]: null,
+        ...(ride.appliedCoupon
+          ? {
+              [`rides/${rideId}/appliedCoupon`]: {
+                ...ride.appliedCoupon,
+                status: "redeemed",
+                redemptionTxid: fundingTxid,
+              },
+            }
+          : {}),
         [`rides/${rideId}/updatedAt`]: now,
         [`driverRequests/${driverId}/${rideId}/status`]: "accepted",
         [`passengerRides/${ride.passengerId}/${rideId}/status`]: "accepted",
       })
+      if (ride.appliedCoupon) {
+        void recordCouponRedemption({
+          rideId,
+          passengerId: ride.passengerId,
+          passengerName: ride.passengerName,
+          txid: fundingTxid,
+        }).catch(() => undefined)
+      }
       return true
     }
   }

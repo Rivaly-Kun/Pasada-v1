@@ -15,18 +15,10 @@ import type { FareConfig } from "./lib/types"
 
 type View = "passenger" | "driver" | "admin"
 
-const VIEWS: { id: View label: string blurb: string }[] = [
-  {
-    id: "passenger",
-    label: "Passenger",
-    blurb: "Book a ride and fund BCH escrow",
-  },
-  {
-    id: "driver",
-    label: "Driver",
-    blurb: "Accept rides and receive BCH payouts",
-  },
-  { id: "admin", label: "Admin", blurb: "Users, fares, contracts" },
+const VIEWS: { id: View label: string }[] = [
+  { id: "passenger", label: "Passenger" },
+  { id: "driver", label: "Driver" },
+  { id: "admin", label: "Admin" },
 ]
 
 export default function App() {
@@ -39,6 +31,7 @@ function PasadaDashboard() {
   const contentWidth = view === "admin" ? "max-w-[1600px]" : "max-w-[1240px]"
 
   useEffect(() => {
+    document.title = "PASADA"
     void ensurePlatformState().catch(() => undefined)
     return subscribePlatformFareConfig(setFareConfig)
   }, [])
@@ -51,13 +44,17 @@ function PasadaDashboard() {
     <div className="min-h-screen bg-ink-50">
       <EscrowFundingCoordinator />
       <header className="sticky top-0 z-50 border-b border-ink-100 bg-white/85 backdrop-blur">
-        <div className={`mx-auto flex ${contentWidth} flex-wrap items-center gap-x-6 gap-y-3 px-5 py-3`}>
-          <div className="flex items-baseline gap-2.5">
+        <div
+          className={`mx-auto flex ${contentWidth} flex-wrap items-center gap-x-6 gap-y-3 px-5 py-3`}
+        >
+          <div className="flex items-center gap-2.5">
+            <img
+              src="/img/LOGO.svg"
+              alt="PASADA"
+              className="h-9 w-11 object-contain"
+            />
             <span className="font-display text-lg font-black tracking-tight">
               PASADA
-            </span>
-            <span className="hidden font-mono text-[10px] tracking-[0.14em] text-ink-300 uppercase sm:inline">
-              Ormoc City · tricycle
             </span>
           </div>
 
@@ -78,15 +75,12 @@ function PasadaDashboard() {
               </button>
             ))}
           </nav>
-
-          <p className="hidden text-[11px] text-ink-300 lg:block">
-            {VIEWS.find((v) => v.id === view)?.blurb} · rates{" "}
-            {fareConfig.version}
-          </p>
         </div>
       </header>
 
-      <main className={`mx-auto ${contentWidth} px-4 py-8 sm:px-5 lg:px-8 lg:py-12`}>
+      <main
+        className={`mx-auto ${contentWidth} px-4 py-8 sm:px-5 lg:px-8 lg:py-12`}
+      >
         {view === "admin" ? (
           <AdminAuthGate>
             {({ user, logout }) => (
@@ -124,13 +118,6 @@ function PasadaDashboard() {
           </div>
         )}
       </main>
-
-      <footer className={`mx-auto ${contentWidth} px-5 pb-10 text-[11px] leading-relaxed text-ink-300`}>
-        Prototype. Fare amounts follow Ormoc City Ordinance No. 121, s. 2023,
-        but PASADA measures the 2.5 km base distance from the passenger&apos;s
-        pickup point rather than the Ormoc City Stage — an adaptation that
-        requires validation by the appropriate city transport authority.
-      </footer>
     </div>
   )
 }

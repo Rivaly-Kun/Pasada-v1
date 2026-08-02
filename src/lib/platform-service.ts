@@ -1,4 +1,5 @@
 import {
+  get,
   onValue,
   ref,
   runTransaction,
@@ -39,15 +40,14 @@ function database(scope: FirebaseScope = "passenger") {
   return getScopedFirebase(scope).database
 }
 
-import { generateBchWallet } from "./bch-wallet"
-
 function defaultAccount(now: number): PlatformAccount {
-  const adminWallet = generateBchWallet()
   return {
     id: PLATFORM_ACCOUNT_ID,
     role: "admin",
     displayName: "PASADA Platform Administrator",
-    bchAddress: adminWallet.address,
+    // The administrator must create this wallet in the Admin browser so the
+    // corresponding signing key is never generated and discarded elsewhere.
+    bchAddress: null,
     createdAt: now,
     updatedAt: now,
     balance: {
@@ -135,6 +135,20 @@ export async function setPlatformBchAddress(value: string): Promise<void> {
     throw new Error(
       "Log in as an administrator before changing the platform wallet.",
     )
+  const tokenConfigSnapshot = await get(
+    ref(database("admin"), "platform/cashtoken/config"),
+  )
+  const lockedIssuerAddress = String(
+    tokenConfigSnapshot.val()?.issuerAddress ?? "",
+  )
+  if (
+    lockedIssuerAddress &&
+    address.toLowerCase() !== lockedIssuerAddress.toLowerCase()
+  ) {
+    throw new Error(
+      "The platform wallet is locked because it controls the initialized PRC token reserve.",
+    )
+  }
   if (!address) {
     await update(ref(database("admin"), "platform/account"), {
       bchAddress: null,
@@ -171,11 +185,17 @@ export function subscribePlatformMetrics(
     const metrics = rides.reduce<PlatformMetrics>(
       (total, ride) => {
         if (ride.status !== "settled") return total
+        total.settledRides += 1
+        const settlementTxid =
+          ride.escrow?.settlementTxid ??
+          (ride.onChainBroadcast ? ride.onChainTxid : undefined)
+        // A database status is useful operationally, but it is not proof that
+        // a platform output exists. BCH totals only include broadcast payouts.
+        if (!settlementTxid) return total
         const fareSats = Number(ride.fareSats ?? 0)
         const feeSats = Number(ride.platformFeeSats ?? 0)
         total.totalRideSats += fareSats
         total.totalPlatformFeeSats += feeSats
-        total.settledRides += 1
         total.bchRides += 1
         total.totalBchFeeSats += feeSats
         return total

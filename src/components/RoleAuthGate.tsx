@@ -68,7 +68,11 @@ export default function RoleAuthGate({
       <PhoneFrame chrome={role.toUpperCase()} variant="auth">
         <div className="grid h-full place-items-center bg-white text-center text-ink">
           <div>
-            <img src="/img/pasada-icon.png" alt="PASADA" className="mx-auto h-16 w-24 object-contain" />
+            <img
+              src="/img/LOGO.svg"
+              alt="PASADA"
+              className="mx-auto h-16 w-24 object-contain"
+            />
             <span className="mx-auto mt-3 block h-7 w-7 animate-spin rounded-full border-2 border-ink-100 border-t-pasada-red" />
             <p className="mt-4 font-mono text-[10px] tracking-[0.14em] text-ink-500 uppercase">
               Restoring PASADA session...
@@ -121,6 +125,7 @@ function RoleLoginPanel({
   const [password, setPassword] = useState("")
   const [plate, setPlate] = useState("")
   const [vehicleBody, setVehicleBody] = useState("")
+  const [referredByCode, setReferredByCode] = useState("")
   const [identityVerification, setIdentityVerification] =
     useState<ApprovedIdentityVerification | null>(null)
   const [loading, setLoading] = useState(false)
@@ -150,7 +155,9 @@ function RoleLoginPanel({
         return
       }
       if (!identityVerification) {
-        throw new Error("Verify your required ID images before creating an account.")
+        throw new Error(
+          "Verify your required ID images before creating an account.",
+        )
       }
 
       const generatedWallet = generateBchWallet()
@@ -169,6 +176,7 @@ function RoleLoginPanel({
           walletMode: "local_wallet",
           bchPublicKey,
           identityVerification,
+          referredByCode: role === "passenger" ? referredByCode : undefined,
           plate,
           vehicleBody,
         })
@@ -192,12 +200,14 @@ function RoleLoginPanel({
       <div className="scroll-quiet h-full overflow-y-auto bg-white px-5 pt-7 pb-8 text-ink">
         <header className="text-center">
           <img
-            src="/img/pasada-icon.png"
+            src="/img/LOGO.svg"
             alt="PASADA BCH tricycle"
             className="mx-auto h-[72px] w-[122px] object-contain"
           />
           <div className="mt-1 flex items-center justify-center gap-2">
-            <span className="font-display text-[18px] font-black tracking-tight">PASADA</span>
+            <span className="font-display text-[18px] font-black tracking-tight">
+              PASADA
+            </span>
             <span className="h-1 w-1 rounded-full bg-ink-300" />
             <span className="font-mono text-[9px] tracking-[0.14em] text-ink-400 uppercase">
               Ormoc City
@@ -266,7 +276,9 @@ function RoleLoginPanel({
             value={password}
             onChange={setPassword}
             type="password"
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            autoComplete={
+              mode === "login" ? "current-password" : "new-password"
+            }
             minLength={6}
           />
 
@@ -289,6 +301,23 @@ function RoleLoginPanel({
             </div>
           )}
 
+          {mode === "register" && role === "passenger" && (
+            <div>
+              <AuthField
+                label="Referral code (optional)"
+                value={referredByCode}
+                onChange={setReferredByCode}
+                autoComplete="off"
+                placeholder="PASADA-GABZ77"
+                required={false}
+              />
+              <p className="mt-1.5 text-[10px] leading-relaxed text-ink-400">
+                A valid code places one real PRC coupon entitlement in the
+                referrer&apos;s admin issue queue.
+              </p>
+            </div>
+          )}
+
           {mode === "register" && (
             <IdentityVerificationPanel
               role={role}
@@ -298,8 +327,18 @@ function RoleLoginPanel({
           )}
 
           {mode === "register" && (
-            <div className={`rounded-2xl border p-3.5 ${role === "passenger" ? "border-pasada-blue/20 bg-pasada-blue/5" : "border-pasada-red/20 bg-pasada-red/5"}`}>
-              <p className={`font-mono text-[9px] tracking-[0.14em] uppercase ${role === "passenger" ? "text-pasada-blue" : "text-pasada-red"}`}>
+            <div
+              className={`rounded-2xl border p-3.5 ${
+                role === "passenger"
+                  ? "border-pasada-blue/20 bg-pasada-blue/5"
+                  : "border-pasada-red/20 bg-pasada-red/5"
+              }`}
+            >
+              <p
+                className={`font-mono text-[9px] tracking-[0.14em] uppercase ${
+                  role === "passenger" ? "text-pasada-blue" : "text-pasada-red"
+                }`}
+              >
                 BCH wallet
               </p>
               <p className="mt-2 text-[11px] leading-relaxed text-ink-500">
@@ -329,7 +368,8 @@ function RoleLoginPanel({
         </form>
 
         <p className="mt-5 text-center text-[10px] leading-relaxed text-ink-400">
-          Passenger and driver sessions are independent. Your BCH wallet key stays in this browser.
+          Passenger and driver sessions are independent. Your BCH wallet key
+          stays in this browser.
         </p>
       </div>
     </PhoneFrame>
@@ -344,6 +384,7 @@ function AuthField({
   autoComplete,
   minLength,
   placeholder,
+  required = true,
 }: {
   label: string
   value: string
@@ -352,6 +393,7 @@ function AuthField({
   autoComplete: string
   minLength?: number
   placeholder?: string
+  required?: boolean
 }) {
   return (
     <label className="block">
@@ -365,7 +407,7 @@ function AuthField({
         autoComplete={autoComplete}
         minLength={minLength}
         placeholder={placeholder}
-        required
+        required={required}
         className="w-full rounded-xl border border-ink-100 bg-ink-50 px-4 py-3 text-[13px] text-ink outline-none placeholder:text-ink-300 focus:border-pasada-blue focus:bg-white"
       />
     </label>

@@ -40,6 +40,8 @@ export interface FareInput {
   discountedSeats: number
   specialTrip: boolean
   nightTrip: boolean
+  /** Fixed-value PRC coupon amount in Philippine pesos. */
+  couponDiscountPhp?: number
 }
 
 export interface FareLine {
@@ -62,6 +64,10 @@ export interface FareBreakdown {
   fixedPlatformFee: number
   platformTax: number
   platformFee: number
+  /** Gross total before a PRC coupon, in centavos. */
+  grossTotal: number
+  /** Applied PRC coupon value, in centavos. */
+  couponDiscount: number
   total: number
   lines: FareLine[]
 }
@@ -94,6 +100,12 @@ export interface PasadaAccount {
   /** Small profile image stored with the public role profile (optional). */
   avatarDataUrl?: string
   bchAddress: string
+  /** CashToken-aware encoding of the same P2PKH locking script. */
+  chipnetTokenAddress: string
+  /** Public passenger referral code, e.g. PASADA-GABZ77. */
+  referralCode?: string
+  referredByCode?: string
+  referredByUid?: string
   bchPublicKey: string
   walletMode: WalletMode
   availableCentavos: number
@@ -151,6 +163,18 @@ export interface LiveRide {
   driverPayoutSats: number
   platformAccountId: string
   platformBchAddress: string | null
+  appliedCoupon?: {
+    symbol: "PRC"
+    categoryId: string
+    amount: 1
+    discountPhp: number
+    passengerTokenAddress: string
+    redemptionTokenAddress: string
+    status: "reserved" | "redeemed"
+    redemptionTxid?: string
+  }
+  /** Fixed PRC discount in Philippine pesos. */
+  discountPhp?: number
   /** Persisted pre-broadcast error, e.g. a missing local signing key. */
   fundingError?: string
   escrow?: {
@@ -233,4 +257,58 @@ export interface ChainTx {
   amount: number
   confirmations: number
   at: string
+}
+
+export interface CashTokenConfig {
+  network: "chipnet"
+  name: "PASADA Referral Credit"
+  symbol: "PRC"
+  categoryId: string
+  totalSupply: number
+  couponValuePhp: number
+  maxCouponsPerRide: 1
+  issuerAddress: string
+  issuerTokenAddress: string
+  redemptionTokenAddress: string
+  preGenesisTxid: string
+  genesisTxid: string
+  initializedAt: number
+  initializedBy: string
+}
+
+export interface ReferralRewardClaim {
+  id: string
+  referredPassengerId: string
+  referredPassengerName: string
+  referredPassengerEmail?: string
+  referrerUid: string
+  referrerName: string
+  referrerEmail?: string
+  referrerCode: string
+  referrerTokenAddress: string
+  /** Referral claims are created at passenger signup, before any ride exists. */
+  source: "signup_referral"
+  rideId?: string
+  amount: 1
+  status: "pending" | "processing" | "sent" | "failed"
+  txid?: string
+  error?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CashTokenActivity {
+  id: string
+  type: "genesis" | "referral_reward" | "coupon_redemption" | "admin_grant"
+  status: "pending" | "processing" | "confirmed" | "failed"
+  amount: number
+  txid?: string
+  rideId?: string
+  referrerUid?: string
+  referrerName?: string
+  referredPassengerId?: string
+  referredPassengerName?: string
+  error?: string
+  createdAt: number
+  updatedAt: number
 }

@@ -1,4 +1,8 @@
 {
+  "title": "PASADA",
+  "icons": {
+    "icon": "/img/LOGO.svg"
+  },
   "description": "Offers a sleek, Uber-inspired interface using custom color themes to enhance user experience and streamline navigation for efficient service access.",
   "robots": {
     "index": false

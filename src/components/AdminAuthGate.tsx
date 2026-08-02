@@ -11,7 +11,7 @@ import { getScopedFirebase } from "../lib/firebase"
 export default function AdminAuthGate({
   children,
 }: {
-  children: (session: { user: User; logout: () => Promise<void> }) => ReactNode
+  children: (session: { user: User logout: () => Promise<void> }) => ReactNode
 }) {
   const [user, setUser] = useState<User | null>(null)
   const [initialized, setInitialized] = useState(false)
@@ -58,7 +58,7 @@ export default function AdminAuthGate({
       <div className="grid min-h-[680px] place-items-center rounded-3xl bg-white shadow-xl ring-1 ring-ink/10">
         <div className="text-center">
           <img
-            src="/img/pasada-icon.png"
+            src="/img/LOGO.svg"
             alt="PASADA"
             className="mx-auto h-20 w-32 object-contain"
           />
@@ -118,13 +118,15 @@ function AdminLogin({ initialError }: { initialError: string }) {
         <div className="relative flex items-center gap-3">
           <span className="grid h-14 w-14 place-items-center rounded-2xl bg-white">
             <img
-              src="/img/pasada-icon.png"
+              src="/img/LOGO.svg"
               alt="PASADA"
               className="h-10 w-12 object-contain"
             />
           </span>
           <div>
-            <p className="font-display text-2xl font-black tracking-tight">PASADA</p>
+            <p className="font-display text-2xl font-black tracking-tight">
+              PASADA
+            </p>
             <p className="font-mono text-[9px] tracking-[0.17em] text-white/40 uppercase">
               Ormoc operations center
             </p>
@@ -139,7 +141,8 @@ function AdminLogin({ initialError }: { initialError: string }) {
             Run every PASADA operation from one live console.
           </h1>
           <p className="mt-5 max-w-md text-[13px] leading-relaxed text-white/50">
-            Monitor riders, drivers, fares, BCH escrow settlements, account standing, and the Chipnet platform wallet in real time.
+            Monitor riders, drivers, fares, BCH escrow settlements, account
+            standing, and the Chipnet platform wallet in real time.
           </p>
         </div>
 
@@ -158,7 +161,9 @@ function AdminLogin({ initialError }: { initialError: string }) {
           <p className="font-mono text-[9px] font-bold tracking-[0.16em] text-pasada-red uppercase">
             Restricted access
           </p>
-          <h2 className="mt-2 font-display text-[30px] font-black">Admin login</h2>
+          <h2 className="mt-2 font-display text-[30px] font-black">
+            Admin login
+          </h2>
           <p className="mt-2 text-[12px] leading-relaxed text-ink-500">
             Sign in with the Firebase administrator account to continue.
           </p>
@@ -193,7 +198,10 @@ function AdminLogin({ initialError }: { initialError: string }) {
           </label>
 
           {error && (
-            <p role="alert" className="mt-4 rounded-xl bg-pasada-red/10 px-3.5 py-3 text-[11px] leading-relaxed text-pasada-red">
+            <p
+              role="alert"
+              className="mt-4 rounded-xl bg-pasada-red/10 px-3.5 py-3 text-[11px] leading-relaxed text-pasada-red"
+            >
               {error}
             </p>
           )}

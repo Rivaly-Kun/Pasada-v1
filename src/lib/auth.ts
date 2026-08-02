@@ -21,6 +21,13 @@ import {
 import { satoshisToCentavos } from "./fare"
 import { getScopedFirebase, type AppRole } from "./firebase"
 import {
+  createReferralCode,
+  deriveTokenAddress,
+  normalizeReferralCode,
+  queueReferralRewardForReferralSignup,
+  resolveReferralCode,
+} from "./cashtoken-service"
+import {
   removeStoredIdentityDocuments,
   storeApprovedIdentityDocuments,
   type ApprovedIdentityVerification,
@@ -36,6 +43,8 @@ export type PasadaRegistration = {
   walletMode: WalletMode
   bchPublicKey: string
   identityVerification: ApprovedIdentityVerification
+  /** Optional code supplied by a new passenger. */
+  referredByCode?: string
   plate?: string
   vehicleBody?: string
 }
@@ -144,12 +153,16 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
     throw new Error("Complete the AI identity verification before registering.")
   }
   if (Date.now() - input.identityVerification.approvedAt > 15 * 60 * 1000) {
-    throw new Error("Your identity check expired. Verify the ID images again before registering.")
+    throw new Error(
+      "Your identity check expired. Verify the ID images again before registering.",
+    )
   }
   if (
     input.identityVerification.verifiedDisplayName !== input.displayName.trim()
   ) {
-    throw new Error("Your display name changed. Verify the ID images again before registering.")
+    throw new Error(
+      "Your display name changed. Verify the ID images again before registering.",
+    )
   }
   const validated = normalizeAndValidateBchAddress(input.bchAddress)
   if (!validated.valid) throw new Error(validated.error)
@@ -179,6 +192,10 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
   const scoped = getScopedFirebase(role)
   await scoped.persistenceReady
   const email = input.email.trim().toLowerCase()
+  const referredBy =
+    role === "passenger" && input.referredByCode?.trim()
+      ? await resolveReferralCode(input.referredByCode)
+      : null
   let credential: UserCredential
   let createdAuthUser = false
 
@@ -211,6 +228,11 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
   const now = Date.now()
   const uid = credential.user.uid
   const roleCollection = role === "passenger" ? "passengers" : "drivers"
+  const chipnetTokenAddress = deriveTokenAddress(validated.address)
+  const referralCode =
+    role === "passenger"
+      ? createReferralCode(input.displayName, uid)
+      : undefined
   let storedIdentityVerification: StoredIdentityVerification | undefined
   try {
     const [userSnapshot, roleSnapshot, balanceSnapshot] = await Promise.all([
@@ -233,10 +255,25 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       email,
       role,
       bchAddress: validated.address,
+      chipnetTokenAddress,
       walletMode: input.walletMode,
       bchPublicKey,
       identityVerification: storedIdentityVerification,
       accountStatus: "active",
+      ...(role === "passenger"
+        ? {
+            referralCode,
+            ...(referredBy
+              ? {
+                  referredByCode: normalizeReferralCode(
+                    input.referredByCode ?? "",
+                  ),
+                  referredByUid: referredBy.uid,
+                  referralQualified: false,
+                }
+              : {}),
+          }
+        : {}),
       ...(role === "driver"
         ? {
             plate: input.plate!.trim().toUpperCase(),
@@ -286,6 +323,7 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
         uid,
         role,
         address: validated.address,
+        tokenAddress: chipnetTokenAddress,
         network: "chipnet",
         mode: input.walletMode,
         source: input.walletMode,
@@ -294,6 +332,17 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
         createdAt: now,
         updatedAt: now,
       },
+    }
+    if (role === "passenger" && referralCode) {
+      writes[`referralCodes/${referralCode}`] = {
+        code: referralCode,
+        uid,
+        displayName: input.displayName.trim(),
+        email,
+        tokenAddress: chipnetTokenAddress,
+        createdAt: now,
+        updatedAt: now,
+      }
     }
     if (!userSnapshot.exists()) writes[`users/${uid}/createdAt`] = now
     if (!balanceSnapshot.exists()) {
@@ -308,6 +357,20 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       }
     }
     await update(ref(scoped.database), writes)
+    if (role === "passenger" && referredBy) {
+      await queueReferralRewardForReferralSignup({
+        passengerId: uid,
+        passengerName: input.displayName.trim(),
+        passengerEmail: email,
+        referrer: {
+          uid: referredBy.uid,
+          displayName: referredBy.displayName,
+          email: referredBy.email,
+          tokenAddress: referredBy.tokenAddress,
+          code: referredBy.code,
+        },
+      })
+    }
     // Subscribe to Watchtower so it starts indexing this address on-chain immediately
     void subscribeAddressToWatchtower(validated.address)
   } catch (error) {
@@ -356,13 +419,19 @@ export async function loadPasadaAccount(
     roleData?.accountStatus ?? nestedProfiles[role]?.accountStatus ?? "active",
   )
   if (accountStatus === "pending") {
-    throw new Error("This PASADA account is waiting for administrator approval.")
+    throw new Error(
+      "This PASADA account is waiting for administrator approval.",
+    )
   }
   if (accountStatus === "suspended") {
-    throw new Error("This PASADA account has been suspended by an administrator.")
+    throw new Error(
+      "This PASADA account has been suspended by an administrator.",
+    )
   }
   if (accountStatus === "rejected") {
-    throw new Error("This PASADA registration was rejected by an administrator.")
+    throw new Error(
+      "This PASADA registration was rejected by an administrator.",
+    )
   }
 
   let wallet = (walletSnapshot.val() ??
@@ -372,7 +441,11 @@ export async function loadPasadaAccount(
   let address = String(wallet?.address ?? roleData?.bchAddress ?? "")
   let validated = normalizeAndValidateBchAddress(address)
   const savedWalletMode = String(
-    wallet?.mode ?? wallet?.source ?? roleData?.walletMode ?? roleData?.walletSource ?? "",
+    wallet?.mode ??
+      wallet?.source ??
+      roleData?.walletMode ??
+      roleData?.walletSource ??
+      "",
   )
   if (
     savedWalletMode &&
@@ -408,6 +481,7 @@ export async function loadPasadaAccount(
     const now = Date.now()
     const autoWallet = generateBchWallet()
     const autoAddress = autoWallet.address
+    const autoTokenAddress = deriveTokenAddress(autoAddress)
     const autoPublicKey = publicKeyForLocalBchWallet(
       autoWallet.privateKeyWif,
       autoAddress,
@@ -425,8 +499,12 @@ export async function loadPasadaAccount(
       email,
       role,
       bchAddress: autoAddress,
+      chipnetTokenAddress: autoTokenAddress,
       walletMode: "local_wallet" as const,
       bchPublicKey: autoPublicKey,
+      ...(role === "passenger"
+        ? { referralCode: createReferralCode(displayName, firebaseUser.uid) }
+        : {}),
       ...(role === "driver"
         ? {
             plate: "ORM-101",
@@ -452,6 +530,7 @@ export async function loadPasadaAccount(
         uid: firebaseUser.uid,
         role,
         address: autoAddress,
+        tokenAddress: autoTokenAddress,
         network: "chipnet",
         mode: "local_wallet",
         source: "local_wallet",
@@ -469,6 +548,18 @@ export async function loadPasadaAccount(
         updatedAt: now,
         version: 1,
       },
+    }
+    if (role === "passenger") {
+      const autoReferralCode = createReferralCode(displayName, firebaseUser.uid)
+      writes[`referralCodes/${autoReferralCode}`] = {
+        code: autoReferralCode,
+        uid: firebaseUser.uid,
+        displayName,
+        email: firebaseUser.email ?? "",
+        tokenAddress: autoTokenAddress,
+        createdAt: now,
+        updatedAt: now,
+      }
     }
 
     await update(ref(scoped.database), writes)
@@ -511,6 +602,54 @@ export async function loadPasadaAccount(
   }
 
   let availableSats = Number(balance?.availableSats ?? 0)
+  const chipnetTokenAddress = deriveTokenAddress(validated.address)
+  const referralCode =
+    role === "passenger"
+      ? String(
+          roleData?.referralCode ??
+            createReferralCode(
+              String(
+                roleData?.displayName ??
+                  firebaseUser.displayName ??
+                  "Passenger",
+              ),
+              firebaseUser.uid,
+            ),
+        )
+      : undefined
+  if (
+    String(roleData?.chipnetTokenAddress ?? "") !== chipnetTokenAddress ||
+    (role === "passenger" && !roleData?.referralCode)
+  ) {
+    const now = Date.now()
+    const publicTokenWrites: Record<string, unknown> = {
+      [`users/${firebaseUser.uid}/roleProfiles/${role}/chipnetTokenAddress`]:
+        chipnetTokenAddress,
+      [`${roleCollection}/${firebaseUser.uid}/chipnetTokenAddress`]:
+        chipnetTokenAddress,
+      [`roleWallets/${role}/${firebaseUser.uid}/tokenAddress`]:
+        chipnetTokenAddress,
+    }
+    if (role === "passenger" && referralCode) {
+      publicTokenWrites[
+        `users/${firebaseUser.uid}/roleProfiles/passenger/referralCode`
+      ] = referralCode
+      publicTokenWrites[`passengers/${firebaseUser.uid}/referralCode`] =
+        referralCode
+      publicTokenWrites[`referralCodes/${referralCode}`] = {
+        code: referralCode,
+        uid: firebaseUser.uid,
+        displayName: String(
+          roleData?.displayName ?? firebaseUser.displayName ?? "Passenger",
+        ),
+        email: firebaseUser.email ?? "",
+        tokenAddress: chipnetTokenAddress,
+        createdAt: Number(roleData?.createdAt ?? now),
+        updatedAt: now,
+      }
+    }
+    await update(ref(scoped.database), publicTokenWrites)
+  }
   // Background balance refresh to keep live blockchain & database synchronized without delaying load
   void refreshPasadaWalletBalance(
     role,
@@ -527,6 +666,16 @@ export async function loadPasadaAccount(
     ),
     avatarDataUrl: String(roleData?.avatarDataUrl ?? "") || undefined,
     bchAddress: validated.address,
+    chipnetTokenAddress,
+    referralCode,
+    referredByCode:
+      role === "passenger"
+        ? String(roleData?.referredByCode ?? "") || undefined
+        : undefined,
+    referredByUid:
+      role === "passenger"
+        ? String(roleData?.referredByUid ?? "") || undefined
+        : undefined,
     bchPublicKey,
     walletMode,
     availableSats,
@@ -546,7 +695,7 @@ export async function loadPasadaAccount(
 export async function updatePasadaProfile(
   role: AppRole,
   uid: string,
-  profile: { displayName: string; avatarDataUrl?: string },
+  profile: { displayName: string avatarDataUrl?: string },
 ): Promise<void> {
   const displayName = profile.displayName.trim()
   if (displayName.length < 2) {
@@ -569,6 +718,15 @@ export async function updatePasadaProfile(
     // Live dispatch reads `drivers/{uid}/name`, while the account profile uses
     // `displayName`; keep both in sync so a saved edit reaches new bookings.
     writes[`drivers/${uid}/name`] = displayName
+  } else {
+    const referralCodeSnapshot = await get(
+      ref(scoped.database, `passengers/${uid}/referralCode`),
+    )
+    const referralCode = String(referralCodeSnapshot.val() ?? "")
+    if (referralCode) {
+      writes[`referralCodes/${referralCode}/displayName`] = displayName
+      writes[`referralCodes/${referralCode}/updatedAt`] = now
+    }
   }
 
   if (profile.avatarDataUrl !== undefined) {
