@@ -24,7 +24,7 @@ export type ApprovedIdentityVerification = {
   role: AppRole
   verifiedDisplayName: string
   approvedAt: number
-  model: "gemini-3.6-flash"
+  model: GeminiVisionModel
   averageConfidence: number
   uploads: IdentityUpload[]
 }
@@ -78,7 +78,12 @@ export type VerificationOutcome =
       assessments: DocumentAssessment[]
     }
 
-const MODEL = "gemini-3.6-flash" as const
+/** Gemini 3.6 is intentionally excluded from ID verification requests. */
+const IDENTITY_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+] as const
+export type GeminiVisionModel = (typeof IDENTITY_MODELS)[number]
 const PASS_CONFIDENCE = 78
 const RESET_CONFIDENCE = 25
 const MAX_IMAGE_BYTES = 7 * 1024 * 1024
@@ -267,7 +272,7 @@ async function assessDocument({
   role: AppRole
   documentType: IdentityDocumentType
   uploads: IdentityUpload[]
-}) {
+}): Promise<{ assessment: DocumentAssessment; model: GeminiVisionModel }> {
   console.log(`🤖 [Gemini Vision] Assessing document type: ${documentType}...`)
   const apiKey = import.meta.env.VITE_GOOGLE_AI_API_KEY
   if (!apiKey) {
@@ -317,42 +322,46 @@ async function assessDocument({
     },
   )
 
-  console.log(`📡 [Gemini Vision] Sending request to Gemini 1.5/3.6 Flash for ${documentType}`)
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: promptParts,
-          },
-        ],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    },
-  )
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "")
-    console.error(`❌ [Gemini Vision] HTTP ${response.status} error for ${documentType}:`, errText)
-    throw new Error("Gemini could not verify the ID right now. Please try again in a moment.")
+  let lastError: unknown
+  for (const model of IDENTITY_MODELS) {
+    try {
+      console.log(`📡 [Gemini Vision] Sending ${documentType} to ${model}`)
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: promptParts }],
+            generationConfig: { responseMimeType: "application/json" },
+          }),
+        },
+      )
+      if (!response.ok) {
+        const details = await response.text().catch(() => "")
+        throw new Error(`HTTP ${response.status}: ${details}`)
+      }
+      const payload = (await response.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+      }
+      const text = payload.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text ?? "")
+        .join("")
+      if (!text) throw new Error("The model returned no document assessment.")
+
+      const assessment = parseAssessment(documentType, text)
+      console.log(`📊 [Gemini Vision] Assessment result from ${model}:`, assessment)
+      return { assessment, model }
+    } catch (error) {
+      lastError = error
+      console.warn(
+        `⚠️ [Gemini Vision] ${model} was unavailable for ${documentType}; trying the next configured model.`,
+        error,
+      )
+    }
   }
-  const payload = (await response.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
-  }
-  const text = payload.candidates?.[0]?.content?.parts
-    ?.map((part) => part.text ?? "")
-    .join("")
-  if (!text) {
-    console.error(`❌ [Gemini Vision] Empty response returned for ${documentType}`)
-    throw new Error("Gemini did not return a document assessment. Please try again.")
-  }
-  
-  const assessment = parseAssessment(documentType, text)
-  console.log(`📊 [Gemini Vision] Assessment result for ${documentType}:`, assessment)
-  return assessment
+  console.error(`❌ [Gemini Vision] All configured models failed for ${documentType}:`, lastError)
+  throw new Error("ID verification is temporarily unavailable. Please try again in a moment.")
 }
 
 export async function verifyIdentityDocuments({
@@ -385,7 +394,7 @@ export async function verifyIdentityDocuments({
     throw new Error("Upload every required front and back ID image before verification.")
   }
 
-  const assessments = await Promise.all(
+  const documentChecks = await Promise.all(
     requiredTypes.map((documentType) =>
       assessDocument({
         role,
@@ -394,6 +403,7 @@ export async function verifyIdentityDocuments({
       }),
     ),
   )
+  const assessments = documentChecks.map((check) => check.assessment)
   const allSides = assessments.flatMap((assessment) => [assessment.front, assessment.back])
   const randomOrSpoofed = allSides.some(
     (side) => side.confidence <= RESET_CONFIDENCE || !side.documentPresent,
@@ -455,7 +465,7 @@ export async function verifyIdentityDocuments({
       role,
       verifiedDisplayName: displayName.trim(),
       approvedAt: Date.now(),
-      model: MODEL,
+      model: documentChecks[0].model,
       averageConfidence: avgConf,
       uploads: approvedUploads,
     },
