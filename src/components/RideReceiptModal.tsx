@@ -1,4 +1,5 @@
 import { formatBchFromSats, formatPeso } from "../lib/fare"
+import { chipnetTransactionUrl } from "../lib/bch-explorer"
 import type { LiveRide } from "../lib/types"
 
 export default function RideReceiptModal({
@@ -13,12 +14,14 @@ export default function RideReceiptModal({
   onMessage?: () => void
 }) {
   const succeeded = ride.status === "settled"
+  const refunded = ride.status === "cancelled" && ride.paymentStatus === "refunded"
   const otherName =
     role === "passenger"
       ? ride.driverName || "Former driver"
       : ride.passengerName || "Former passenger"
-  const txid =
-    ride.onChainTxid ?? ride.escrow?.settlementTxid ?? ride.escrow?.fundingTxid
+  const txid = succeeded
+    ? ride.onChainTxid ?? ride.escrow?.settlementTxid
+    : ride.escrow?.refundTxid ?? ride.escrow?.fundingTxid
 
   return (
     <div className="absolute inset-0 z-[60] flex items-end bg-ink/55 p-3 backdrop-blur-[2px]">
@@ -29,7 +32,11 @@ export default function RideReceiptModal({
               PASADA ride receipt
             </p>
             <h2 className="mt-1 font-display text-xl font-extrabold">
-              {succeeded ? "Trip settled" : "Ride cancelled"}
+              {succeeded
+                ? "Trip settled"
+                : refunded
+                  ? "Ride cancelled & refunded"
+                  : "Ride cancelled"}
             </h2>
           </div>
           <button
@@ -81,6 +88,18 @@ export default function RideReceiptModal({
         <div className="mt-4 divide-y divide-ink-100 rounded-2xl bg-white px-4 ring-1 ring-ink-100">
           <ReceiptRow label="Distance" value={`${ride.distanceKm} km`} />
           <ReceiptRow label="Fare paid" value={formatPeso(ride.total)} />
+          {!succeeded && (
+            <ReceiptRow
+              label="Refund status"
+              value={
+                refunded
+                  ? role === "passenger"
+                    ? "Refunded to your wallet"
+                    : "Passenger refunded"
+                  : "No payment was taken"
+              }
+            />
+          )}
           {ride.appliedCoupon && (
             <ReceiptRow
               label="PRC coupon"
@@ -100,13 +119,23 @@ export default function RideReceiptModal({
 
         <div className="mt-4 rounded-2xl border border-pasada-blue/20 bg-pasada-blue/5 p-4">
           <p className="font-mono text-[9px] font-bold tracking-[0.13em] text-pasada-blue uppercase">
-            BCH ESCROW {succeeded ? "SETTLED" : "RECORD"}
+            BCH ESCROW {succeeded ? "SETTLED" : refunded ? "REFUNDED" : "RECORD"}
           </p>
           <p className="num mt-2 break-all text-[10px] leading-relaxed text-ink-500">
             {txid ||
               "No on-chain transaction was needed for this cancelled or demo ride."}
           </p>
           <p className="mt-2 text-[10px] text-ink-500">Ride ID · {ride.id}</p>
+          {txid && (
+            <a
+              href={chipnetTransactionUrl(txid)}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-block text-[10px] font-bold text-pasada-blue hover:underline"
+            >
+              View transaction on Chipnet BCH Explorer →
+            </a>
+          )}
           {ride.appliedCoupon?.redemptionTxid && (
             <p className="num mt-2 break-all text-[9px] text-pasada-blue">
               PRC redemption · {ride.appliedCoupon.redemptionTxid}
@@ -114,7 +143,7 @@ export default function RideReceiptModal({
           )}
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className={`mt-4 grid gap-2 ${onMessage ? "grid-cols-2" : "grid-cols-1"}`}>
           <button
             type="button"
             onClick={onClose}
@@ -122,14 +151,15 @@ export default function RideReceiptModal({
           >
             Done
           </button>
-          <button
-            type="button"
-            onClick={onMessage}
-            disabled={!onMessage}
-            className="rounded-xl bg-pasada-red py-3 text-[12px] font-bold text-white disabled:bg-ink-100"
-          >
-            Message {role === "passenger" ? "driver" : "passenger"}
-          </button>
+          {onMessage && (
+            <button
+              type="button"
+              onClick={onMessage}
+              className="rounded-xl bg-pasada-red py-3 text-[12px] font-bold text-white"
+            >
+              Message {role === "passenger" ? "driver" : "passenger"}
+            </button>
+          )}
         </div>
       </section>
     </div>

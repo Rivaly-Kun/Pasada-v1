@@ -21,7 +21,12 @@ import {
   refundEscrow,
   settleEscrow,
 } from "./bch-escrow"
-import { validatePrivateKeyForBchAddress } from "./bch-wallet"
+import {
+  publicKeyForLocalBchWallet,
+  validatePrivateKeyForBchAddress,
+  verifyPublicKeyForBchAddress,
+} from "./bch-wallet"
+import { archiveRideMessages } from "./chat-service"
 import {
   PRC_TOKEN_DUST_SATS,
   recordCouponRedemption,
@@ -308,10 +313,29 @@ export async function createRide(input: RideInput): Promise<string> {
   let passengerPublicKey = input.passenger.bchPublicKey
 
   if (!input.demoMode) {
-    if (!passengerPublicKey) {
-      throw new Error(
-        "This BCH address was linked before ownership verification. Reconnect or re-link the wallet to use BCH escrow.",
+    try {
+      passengerPublicKey = verifyPublicKeyForBchAddress(
+        passengerPublicKey,
+        input.passenger.bchAddress,
       )
+    } catch {
+      const passengerWif = await linkedWalletWif(
+        db,
+        "passenger",
+        input.passenger.uid,
+        input.passenger.bchAddress,
+      )
+      passengerPublicKey = publicKeyForLocalBchWallet(
+        passengerWif,
+        input.passenger.bchAddress,
+      )
+      await update(ref(db), {
+        [`roleWallets/passenger/${input.passenger.uid}/publicKey`]:
+          passengerPublicKey,
+        [`users/${input.passenger.uid}/roleProfiles/passenger/bchPublicKey`]:
+          passengerPublicKey,
+        [`passengers/${input.passenger.uid}/bchPublicKey`]: passengerPublicKey,
+      })
     }
     let liveBalanceSats = Number(input.passenger.availableSats ?? 0)
     try {
@@ -1135,6 +1159,7 @@ export async function cancelFundingRideByDriver(
     [`driverRequests/${driverId}/${rideId}/status`]: "cancelled",
     [`passengerRides/${ride.passengerId}/${rideId}/status`]: "cancelled",
   })
+  await archiveRideMessages("driver", ride)
   return true
 }
 
@@ -1336,6 +1361,13 @@ export async function completeRide(
       }
     }
     await update(ref(db), writes)
+    await archiveRideMessages("driver", {
+      ...ride,
+      status: "settled",
+      paymentStatus: "settled",
+      settledAt,
+      updatedAt: settledAt,
+    })
     if (!ride.demoMode) {
       await refreshChainWallets([
         {
@@ -1518,6 +1550,7 @@ export async function cancelRide(
       }
     }
     await update(ref(db), writes)
+    await archiveRideMessages("passenger", ride)
     return true
   } catch (error) {
     const message =
@@ -1530,6 +1563,12 @@ export async function cancelRide(
         [`escrow/refundTxid`]: refundTxid,
         [`escrow/error`]: message,
         updatedAt: Date.now(),
+      })
+      await archiveRideMessages("passenger", {
+        ...reservedRide,
+        status: "cancelled",
+        paymentStatus: "refunded",
+        escrow: { ...reservedRide.escrow!, refundTxid },
       })
       return true
     }

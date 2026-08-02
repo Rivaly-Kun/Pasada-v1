@@ -9,11 +9,10 @@ import FareBreakdownList, {
   BuyoutNotice,
 } from "../../components/FareBreakdownList"
 import BchSendCard from "../../components/BchSendCard"
-import FormerRideMessages from "../../components/FormerRideMessages"
-import { subscribeUnreadMessages } from "../../lib/chat-service"
 import MapCanvas from "../../components/MapCanvas"
 import QRCode from "../../components/QRCode"
 import RideReceiptModal from "../../components/RideReceiptModal"
+import RideChat from "../../components/RideChat"
 import { BottomNav, Icons, PhoneFrame } from "../../components/PhoneFrame"
 import { Button, Pill, Row, SectionLabel, Toggle } from "../../components/ui"
 import {
@@ -25,6 +24,7 @@ import {
   toSatoshis,
 } from "../../lib/fare"
 import { useBchPhpQuote } from "../../lib/bch-price"
+import { chipnetTransactionUrl } from "../../lib/bch-explorer"
 import {
   ROBINSONS_PLACE_ORMOC,
   SM_CENTER_ORMOC,
@@ -68,7 +68,6 @@ import type {
 const NAV = [
   { id: "home", label: "Home", icon: Icons.home },
   { id: "wallet", label: "Wallet", icon: Icons.pay },
-  { id: "messages", label: "Messages", icon: Icons.messages },
   { id: "activity", label: "Activity", icon: Icons.activity },
   { id: "settings", label: "Settings", icon: Icons.settings },
 ]
@@ -102,29 +101,9 @@ export default function PassengerApp({
   })
 
   const [selectedReceipt, setSelectedReceipt] = useState<LiveRide | null>(null)
-  const [messageRideId, setMessageRideId] = useState<string | null>(null)
-  const [unreadRooms, setUnreadRooms] = useState<Record<string, boolean>>({})
   const profileAccount = useMemo(
     () => ({ ...account, ...profile }),
     [account, profile],
-  )
-
-  useEffect(() => {
-    return subscribeUnreadMessages({
-      role: "passenger",
-      uid: account.uid,
-      rides: rideHistory,
-      onUnreadChange: setUnreadRooms,
-    })
-  }, [account.uid, rideHistory])
-
-  const hasUnreadMessages = Object.values(unreadRooms).some(Boolean)
-  const navItems = useMemo(
-    () =>
-      NAV.map((item) =>
-        item.id === "messages" ? { ...item, badge: hasUnreadMessages } : item,
-      ),
-    [hasUnreadMessages],
   )
 
   useEffect(() => {
@@ -504,6 +483,7 @@ export default function PassengerApp({
 
       {onRide && (
         <RideScreen
+          account={profileAccount}
           status={status}
           breakdown={breakdown}
           ride={liveRide}
@@ -556,32 +536,14 @@ export default function PassengerApp({
           onProfileSaved={(nextProfile) => setProfile(nextProfile)}
         />
       )}
-      {tab === "messages" && !onRide && status !== "quoting" && (
-        <FormerRideMessages
-          role="passenger"
-          account={profileAccount}
-          rides={rideHistory}
-          focusedRideId={messageRideId}
-        />
-      )}
-
       {!onRide && status !== "quoting" && (
-        <BottomNav items={navItems} active={tab} onSelect={setTab} />
+        <BottomNav items={NAV} active={tab} onSelect={setTab} />
       )}
       {selectedReceipt && (
         <RideReceiptModal
           ride={selectedReceipt}
           role="passenger"
           onClose={() => setSelectedReceipt(null)}
-          onMessage={
-            selectedReceipt.driverId
-              ? () => {
-                  setMessageRideId(selectedReceipt.id)
-                  setSelectedReceipt(null)
-                  setTab("messages")
-                }
-              : undefined
-          }
         />
       )}
     </PhoneFrame>
@@ -1164,6 +1126,7 @@ function LocationRow({
 /* ---------------------------------------------------------------- ride --- */
 
 function RideScreen({
+  account,
   status,
   breakdown,
   ride,
@@ -1176,6 +1139,7 @@ function RideScreen({
   onDone,
   serviceError,
 }: {
+  account: PasadaAccount
   status: RideStatus
   breakdown: ReturnType<typeof calculateFare>
   ride: LiveRide | null
@@ -1229,6 +1193,8 @@ function RideScreen({
           <Pill tone="outline">Config {breakdown.config.version}</Pill>
           {ride?.demoMode && <Pill tone="red">Live Ormoc demo</Pill>}
         </div>
+
+        {ride && <RideChat role="passenger" account={account} ride={ride} />}
 
         {status === "funding" && (
           <>
@@ -1377,7 +1343,7 @@ function RideScreen({
             </div>
             {settlementTxid ? (
               <a
-                href={`https://chipnet.chaingraph.cash/tx/${settlementTxid}`}
+                href={chipnetTransactionUrl(settlementTxid)}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-3 flex items-center justify-between gap-3 rounded-lg text-[11px] text-pasada-blue hover:underline"
@@ -1616,10 +1582,8 @@ function ActivityScreen({
       <h1 className="font-display text-[26px] font-extrabold">Activity</h1>
       <div className="mt-4 space-y-2">
         {rides.map((r) => (
-          <button
+          <article
             key={r.id}
-            type="button"
-            onClick={() => onSelectReceipt(r)}
             className="w-full rounded-xl bg-white p-4 text-left transition-transform hover:-translate-y-0.5 hover:ring-1 hover:ring-pasada-blue/30"
           >
             <div className="flex items-start justify-between gap-3">
@@ -1647,10 +1611,25 @@ function ActivityScreen({
                 {new Date(r.createdAt).toLocaleString()}
               </span>
             </div>
-            <p className="mt-3 text-[10px] font-bold text-pasada-blue">
-              Tap to view receipt →
-            </p>
-          </button>
+            <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-bold text-pasada-blue">
+              <button type="button" onClick={() => onSelectReceipt(r)}>
+                View receipt →
+              </button>
+              {r.status === "settled" &&
+                (r.onChainTxid ?? r.escrow?.settlementTxid) && (
+                  <a
+                    href={chipnetTransactionUrl(
+                      r.onChainTxid ?? r.escrow?.settlementTxid ?? "",
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hover:underline"
+                  >
+                    View transaction ↗
+                  </a>
+                )}
+            </div>
+          </article>
         ))}
         {rides.length === 0 && (
           <p className="rounded-xl bg-white p-4 text-[12px] text-ink-300">
@@ -1887,15 +1866,6 @@ function SettingsScreen({
               }`}
             />
           </button>
-        </div>
-        <div className="border-t border-ink-100 py-3.5">
-          <p className="text-[13px] font-semibold text-ink-700">
-            Ride messages
-          </p>
-          <p className="mt-0.5 text-[10px] text-ink-500">
-            Former drivers appear in Messages after a completed or cancelled
-            ride.
-          </p>
         </div>
       </div>
 

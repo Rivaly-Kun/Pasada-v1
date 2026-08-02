@@ -467,7 +467,6 @@ export async function loadPasadaAccount(
   let bchPublicKey = String(wallet?.publicKey ?? roleData?.bchPublicKey ?? "")
   let backfilledLocalPublicKey = false
   if (
-    !bchPublicKey &&
     walletMode === "local_wallet" &&
     validated.valid &&
     typeof window !== "undefined"
@@ -475,8 +474,14 @@ export async function loadPasadaAccount(
     const localWif = localStorage.getItem(localWalletKey(validated.address))
     if (localWif) {
       try {
-        bchPublicKey = publicKeyForLocalBchWallet(localWif, validated.address)
-        backfilledLocalPublicKey = true
+        const localPublicKey = publicKeyForLocalBchWallet(
+          localWif,
+          validated.address,
+        )
+        if (bchPublicKey !== localPublicKey) {
+          bchPublicKey = localPublicKey
+          backfilledLocalPublicKey = true
+        }
       } catch {
         // Leave legacy wallet data unchanged if its browser-local key is unavailable.
       }

@@ -23,10 +23,37 @@ export type ChatPresence = {
   updatedAt: number
 }
 
+const ACTIVE_CHAT_STATUSES = new Set<LiveRide["status"]>([
+  "funding",
+  "accepted",
+  "arriving",
+  "awaiting_pin",
+  "in_transit",
+  "completing",
+])
+
 function isRideParty(role: AppRole, uid: string, ride: LiveRide) {
   return role === "passenger"
     ? ride.passengerId === uid
     : ride.driverId === uid
+}
+
+export function isRideChatActive(ride: LiveRide): boolean {
+  return Boolean(ride.driverId) && ACTIVE_CHAT_STATUSES.has(ride.status)
+}
+
+/** Retains the conversation record but marks it closed after the ride ends. */
+export async function archiveRideMessages(
+  role: AppRole,
+  ride: LiveRide,
+): Promise<void> {
+  if (!ride.driverId) return
+  const { database } = getScopedFirebase(role)
+  await set(ref(database, `rideMessageArchives/${roomIdForRide(ride)}`), {
+    rideId: ride.id,
+    status: ride.status,
+    archivedAt: Date.now(),
+  })
 }
 
 /** One private room per passenger/driver pair, even if they shared many rides. */
@@ -162,7 +189,7 @@ export function subscribeRideMessages(
   )
 }
 
-/** Sends a short message in a room only exposed from a completed shared ride. */
+/** Sends a short message while both riders are on an active trip. */
 export async function sendRideMessage({
   role,
   uid,
@@ -179,6 +206,9 @@ export async function sendRideMessage({
   const message = text.trim()
   if (!isRideParty(role, uid, ride)) {
     throw new Error("This message room is available only to the riders on this trip.")
+  }
+  if (!isRideChatActive(ride)) {
+    throw new Error("Messages are available only while this ride is active.")
   }
   if (!message) return
   if (message.length > 500) {

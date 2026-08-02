@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import BchSendCard from "../../components/BchSendCard"
-import FormerRideMessages from "../../components/FormerRideMessages"
-import { subscribeUnreadMessages } from "../../lib/chat-service"
 import MapCanvas from "../../components/MapCanvas"
 import QRCode from "../../components/QRCode"
 import RideReceiptModal from "../../components/RideReceiptModal"
+import RideChat from "../../components/RideChat"
 import { BottomNav, Icons, PhoneFrame } from "../../components/PhoneFrame"
 import { Button, Pill, Row, SectionLabel } from "../../components/ui"
 import WalletSigningKeyCard from "../../components/WalletSigningKeyCard"
@@ -16,6 +15,7 @@ import {
   settlementOutputs,
 } from "../../lib/fare"
 import { useBchPhpQuote } from "../../lib/bch-price"
+import { chipnetTransactionUrl } from "../../lib/bch-explorer"
 import {
   logoutPasada,
   refreshPasadaWalletBalance,
@@ -51,7 +51,6 @@ import type {
 const NAV = [
   { id: "home", label: "Home", icon: Icons.home },
   { id: "wallet", label: "Wallet", icon: Icons.pay },
-  { id: "messages", label: "Messages", icon: Icons.messages },
   { id: "activity", label: "Activity", icon: Icons.activity },
   { id: "settings", label: "Settings", icon: Icons.settings },
 ]
@@ -89,8 +88,6 @@ export default function DriverApp({
     avatarDataUrl: account.avatarDataUrl,
   })
   const [selectedReceipt, setSelectedReceipt] = useState<LiveRide | null>(null)
-  const [messageRideId, setMessageRideId] = useState<string | null>(null)
-  const [unreadRooms, setUnreadRooms] = useState<Record<string, boolean>>({})
   // A terminal ride can briefly remain in the driver's Realtime Database
   // snapshot while its final availability update arrives. Remembering a
   // dismissed terminal ride prevents that stale snapshot from reopening the
@@ -102,24 +99,6 @@ export default function DriverApp({
   const profileAccount = useMemo(
     () => ({ ...account, ...profile }),
     [account, profile],
-  )
-
-  useEffect(() => {
-    return subscribeUnreadMessages({
-      role: "driver",
-      uid: account.uid,
-      rides: rideHistory,
-      onUnreadChange: setUnreadRooms,
-    })
-  }, [account.uid, rideHistory])
-
-  const hasUnreadMessages = Object.values(unreadRooms).some(Boolean)
-  const navItems = useMemo(
-    () =>
-      NAV.map((item) =>
-        item.id === "messages" ? { ...item, badge: hasUnreadMessages } : item,
-      ),
-    [hasUnreadMessages],
   )
 
   useEffect(() => {
@@ -758,6 +737,9 @@ export default function DriverApp({
                   ? "Demo driver moving"
                   : "Arrived at pickup"}
               </Button>
+              {liveRide && (
+                <RideChat role="driver" account={profileAccount} ride={liveRide} />
+              )}
             </ActionSheet>
           )}
 
@@ -798,6 +780,9 @@ export default function DriverApp({
               <p className="mt-2 text-[11px] text-ink-300">
                 The passenger can see this ride&apos;s unique PIN in their app.
               </p>
+              {liveRide && (
+                <RideChat role="driver" account={profileAccount} ride={liveRide} />
+              )}
             </ActionSheet>
           )}
 
@@ -834,6 +819,9 @@ export default function DriverApp({
               <p className="mt-2 text-center text-[11px] text-ink-400">
                 Lagging GPS or arrived early? Click to complete &amp; settle.
               </p>
+              {liveRide && (
+                <RideChat role="driver" account={profileAccount} ride={liveRide} />
+              )}
             </ActionSheet>
           )}
 
@@ -874,7 +862,9 @@ export default function DriverApp({
               </p>
               {(liveRide?.onChainTxid ?? liveRide?.escrow?.settlementTxid) && (
                 <a
-                  href={`https://chipnet.chaingraph.cash/tx/${liveRide?.onChainTxid ?? liveRide?.escrow?.settlementTxid}`}
+                  href={chipnetTransactionUrl(
+                    liveRide?.onChainTxid ?? liveRide?.escrow?.settlementTxid ?? "",
+                  )}
                   target="_blank"
                   rel="noreferrer"
                   className="mt-3 flex justify-between gap-3 text-[11px] text-pasada-blue hover:underline"
@@ -910,14 +900,6 @@ export default function DriverApp({
       {tab === "activity" && (
         <DriverActivity rides={rideHistory} onSelectReceipt={setSelectedReceipt} />
       )}
-      {tab === "messages" && (
-        <FormerRideMessages
-          role="driver"
-          account={profileAccount}
-          rides={rideHistory}
-          focusedRideId={messageRideId}
-        />
-      )}
       {tab === "settings" && (
         <DriverSettings
           account={profileAccount}
@@ -926,18 +908,13 @@ export default function DriverApp({
       )}
 
       {(tab !== "home" || stage === "idle") && (
-        <BottomNav items={navItems} active={tab} onSelect={setTab} />
+        <BottomNav items={NAV} active={tab} onSelect={setTab} />
       )}
       {selectedReceipt && (
         <RideReceiptModal
           ride={selectedReceipt}
           role="driver"
           onClose={() => setSelectedReceipt(null)}
-          onMessage={() => {
-            setMessageRideId(selectedReceipt.id)
-            setSelectedReceipt(null)
-            setTab("messages")
-          }}
         />
       )}
     </PhoneFrame>
@@ -1161,10 +1138,8 @@ function DriverActivity({
       </div>
       <div className="mt-5 space-y-2">
         {rides.map((ride) => (
-          <button
+          <article
             key={ride.id}
-            type="button"
-            onClick={() => onSelectReceipt(ride)}
             className="w-full rounded-xl bg-white p-4 text-left transition-transform hover:-translate-y-0.5 hover:ring-1 hover:ring-pasada-blue/30"
           >
             <div className="flex items-center justify-between gap-3">
@@ -1179,8 +1154,25 @@ function DriverActivity({
               </Pill>
               <Pill tone="outline">{ride.distanceKm} km</Pill>
             </div>
-            <p className="mt-3 text-[10px] font-bold text-pasada-blue">Tap to view receipt →</p>
-          </button>
+            <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-bold text-pasada-blue">
+              <button type="button" onClick={() => onSelectReceipt(ride)}>
+                View receipt →
+              </button>
+              {ride.status === "settled" &&
+                (ride.onChainTxid ?? ride.escrow?.settlementTxid) && (
+                  <a
+                    href={chipnetTransactionUrl(
+                      ride.onChainTxid ?? ride.escrow?.settlementTxid ?? "",
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hover:underline"
+                  >
+                    View transaction ↗
+                  </a>
+                )}
+            </div>
+          </article>
         ))}
         {rides.length === 0 && (
           <p className="rounded-xl bg-white p-4 text-[12px] text-ink-300">
