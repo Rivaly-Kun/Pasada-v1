@@ -1,161 +1,139 @@
-# PASADA 🛺⚡
+# PASADA
 
-> **Decentralized Tricycle Ride-Hailing & Non-Custodial Bitcoin Cash (BCH) Settlement Platform**  
-> *tailored for Ormoc City, Leyte, Philippines*
+**A tricycle booking system for Ormoc City with transparent Bitcoin Cash (BCH) fare escrow.**
 
----
+PASADA helps passengers request a tricycle, lets registered drivers accept nearby requests, and holds a BCH fare in a ride-specific CashScript contract until the ride is completed or refunded. It is a working web-app prototype built for Chipnet, the BCH test network.
 
-## 📌 Overview
+## Pre-judging summary
 
-**PASADA** is a modern, web3-powered urban mobility platform designed to modernize tricycle transit in Ormoc City. By combining intuitive mobile-first web applications with non-custodial **Bitcoin Cash (BCH)** smart contract escrow and real-time blockchain settlement, PASADA connects passengers and registered tricycle drivers with transparent, instant, and low-fee transactions.
+| Question | PASADA's answer |
+| --- | --- |
+| What problem does it solve? | It makes tricycle booking, pricing, live ride coordination, and payment records easier to understand for passengers, drivers, and organizers. |
+| What makes it different? | The fare is locked in a ride-specific BCH smart contract; neither PASADA nor Firebase can redirect its payout. |
+| Who uses it? | Passengers request rides, drivers accept and complete them, and organizers manage fare rules and review activity. |
+| Is it real blockchain integration? | Yes. The app creates, funds, refunds, and settles CashScript UTXOs on BCH Chipnet, with transactions viewable in the Chipnet BCH Explorer. |
+| Is it production money today? | No. This version uses Chipnet test BCH. It is a prototype; mainnet deployment needs security review, operational monitoring, and user key-recovery design. |
 
----
+## What reviewers can see
 
-## ✨ Key Features
+- Passenger and driver sign-up, role-based access, and browser-local BCH wallets.
+- Passenger booking with named pickup/destination locations and an automatic **four-seat minimum buyout**. A declared group of five or six is billed for that many seats.
+- Real-time driver dispatch, acceptance, driver approach, PIN verification, ride progress, in-ride chat, and post-ride activity history.
+- BCH escrow funding after the driver accepts, then an on-chain fixed split to the driver and PASADA when the driver completes the ride.
+- Clear cancellation/refund state, transaction links, and a public on-chain timeout-refund path.
+- Organizer controls for fare configuration, platform fee wallet, activity review, and operational visibility.
 
-### 🛵 Passenger Application
-- **Interactive Map & Fare Quoting**: Instant location pinning across Ormoc City landmarks (Ormoc City Public Market, Ormoc City Superdome, Brgy. Cogon, etc.).
-- **6-Seat Buyout & Discount Rules**: Automated fare calculation supporting exclusive tricycle buyouts, senior/PWD/student discount classifications, night trip surcharges, and special route rates.
-- **Embedded BCH Wallet**: Native browser wallet generation with CashAddr validation (`bchtest:`), WIF key recovery, and **10-second auto-syncing** via Fulcrum Electrum WSS nodes.
-- **Live Driver Radar & Driver Rating**: Live driver approach tracking, PIN verification, and post-ride 5-star rating system with feedback tags (*Friendly driver*, *Safe driving*, *Clean tricycle*, *Punctual*).
+## The booking and payment flow
 
-### 🛺 Driver Application
-- **Online Presence & Radar System**: One-tap online status toggle with pulsing radar active indicator and live geolocation streaming.
-- **Dispatch Alert Sheets**: Real-time booking notification cards with countdown timers, pickup distance, trip distance, seat buyout breakdowns, and payout quotes.
-- **Manual Arrival & Completion**: Manual **"Mark as Arrived & Complete Ride"** button ensuring drivers can complete trips seamlessly regardless of network latency.
-- **Earnings & Wallet Sync**: Dedicated wallet tab displaying satoshis (`0.01035000 BCH · 1,035,000 sats`), PHP peso conversions, manual **"Sync wallet"** trigger, and historical ride payouts.
+```mermaid
+sequenceDiagram
+    participant P as Passenger app
+    participant D as Driver app
+    participant F as Firebase (coordination)
+    participant C as CashScript escrow on BCH Chipnet
 
-### ⚙️ Admin Console
-- **Fare Configuration Management**: Dynamic control over base distance, base fare per seat, additional km rates, discount percentages, night surcharges, and platform fee parameters.
-- **Platform Fee Wallet**: Dedicated Platform Admin BCH Chipnet address receiving automated on-chain fee commissions.
-- **Metrics & Auditing**: City-wide ride counters, volume metrics (BCH vs. cash), and smart contract settlement logs.
-
----
-
-## ⚡ Blockchain & Smart Contract Architecture
-
-PASADA features a browser-native Bitcoin Cash transaction engine built on **Chipnet (BCH Testnet4)**:
-
-```
-                  ┌──────────────────────────────────────────────┐
-                  │              Passenger Wallet                │
-                  │   bchtest:qz9fhmj96grs9dmrdnau9ah07cf5...   │
-                  └──────────────────────┬───────────────────────┘
-                                         │
-                                   Ride Settled
-                                         │
-             ┌───────────────────────────┴───────────────────────────┐
-             │   Raw P2PKH Transaction (@bitauth/libauth signed)     │
-             │   BIP-0143 Digest + ECDSA SIGHASH_ALL | SIGHASH_FORKID   │
-             └─────────────┬───────────────────────────┬─────────────┘
-                           │                           │
-             ┌─────────────▼─────────────┐ ┌───────────▼─────────────┐
-             │       Driver Payout       │ │   Platform Commission   │
-             │  (Driver's CashAddr)      │ │   (Admin's CashAddr)    │
-             └───────────────────────────┘ └─────────────────────────┘
+    P->>F: Create booking and fare quote
+    F->>D: Notify available driver
+    D->>F: Accept booking
+    P->>C: Fund this ride's escrow from local BCH wallet
+    D->>F: Arrive, verify passenger PIN, complete ride
+    D->>C: Sign CashScript settlement transaction
+    C-->>D: Fixed driver payout
+    C-->>F: Fixed platform fee to organizer BCH address
 ```
 
-- **UTXO Querying & Broadcasting**: Direct WSS connection to public Fulcrum Electrum nodes (`wss://chipnet.bch.ninja:50004`, `wss://chipnet.imaginary.cash:50004`).
-- **Signature & Digest Construction**: Uses `@bitauth/libauth` for secp256k1 ECDSA DER signatures with `SIGHASH_ALL | SIGHASH_FORKID` (`0x41`).
-- **Automated On-Chain Payout Split**: When a ride is completed, a raw transaction is built, signed locally, and broadcasted to send `driverPayoutSats` to the driver's CashAddr and `platformFeeSats` to the platform admin CashAddr.
+### Booking states
 
----
+1. **Searching** — Passenger creates a request. It closes after one minute if no driver accepts.
+2. **Funding** — When a driver accepts, the passenger's browser funds that ride's unique CashScript address. If no payment is completed within two minutes, the driver is released and the booking cancels.
+3. **Accepted / arriving / PIN verification** — The apps share live status, location, and an in-ride chat. The passenger gives the one-time PIN to begin the ride.
+4. **In transit** — The passenger sees estimated progress. GPS updates improve the progress measurement; an estimated fallback prevents the indicator from remaining static between location updates.
+5. **Settled or refunded** — The driver completes the on-chain payout after the ride, or the passenger receives a refund. Both users can open the transaction from Activity.
 
-## 🛠️ Technology Stack
+## Why CashScript matters here
 
-- **Frontend**: React 19, Vite 8, TypeScript 5.7
-- **Styling**: Tailwind CSS v4 (`@tailwindcss/vite`), Google Fonts (Outfit, Inter)
-- **Blockchain**: `@bitauth/libauth`, Electrum WSS (`@electrum-cash/network`), Web Crypto API (SHA-256 P2PKH scripthash)
-- **Realtime State & Auth**: Firebase Realtime Database, Firebase Authentication
+Firebase coordinates the booking experience; it does **not** control the BCH funds. The fare is sent to a CashScript contract address that is constructed from the passenger, driver, platform addresses, fixed payout amounts, and refund deadline for that specific ride.
 
----
+The contract has three paths:
 
-## 🚀 Getting Started
+| Path | Who can trigger it | What the contract enforces |
+| --- | --- | --- |
+| `settle` | Driver signature | Exactly two outputs: the precomputed driver payout and the precomputed PASADA platform fee. |
+| `refund` | Passenger signature | A single output returning the escrow amount (less the fixed network-fee reserve) to the passenger address. |
+| `timeoutRefund` | Anyone after the deadline | A single, locked output to the passenger address. It needs no private key and cannot pay a third party. |
 
-### Prerequisites
+The contract never accepts a transaction that changes these destination addresses or amounts. This means a database write, compromised organizer account, or altered UI cannot make the escrow pay an arbitrary wallet.
 
-- **Node.js**: v20.0.0 or higher
-- **pnpm** or **npm**
+Read the technical implementation and judge Q&A in [docs/CASHSCRIPT-INTEGRATION.md](docs/CASHSCRIPT-INTEGRATION.md). The contract source is [contracts/PasadaEscrow.cash](contracts/PasadaEscrow.cash).
 
-### Installation
+## Privacy and security approach
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/your-org/pasada.git
-   cd pasada
-   ```
+- The passenger and driver BCH signing keys stay in the browser that created or linked the wallet; the app stores their public address and public key in Firebase, never their WIF/private key.
+- Before contract creation, PASADA verifies that each published public key matches the displayed BCH address.
+- Contract funding, settlement, and refund transactions are constructed and signed in the relevant user's browser, then broadcast to BCH Chipnet through Electrum providers.
+- Transaction IDs are shown in the activity record and link to [Chipnet BCH Explorer](https://chipnet.bch.ninja/).
+- Ride chat is available only during a live booking or trip and is archived after the ride closes.
 
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+### Important prototype boundaries
 
-3. **Configure Environment Variables**:
-   Create a `.env` file in the root directory (or copy `.env.example`):
-   ```env
-   VITE_FIREBASE_API_KEY=your_firebase_api_key
-   VITE_FIREBASE_AUTH_DOMAIN=pasada-6a6a9.firebaseapp.com
-   VITE_FIREBASE_DATABASE_URL=https://pasada-6a6a9-default-rtdb.asia-southeast1.firebasedatabase.app
-   VITE_FIREBASE_PROJECT_ID=pasada-6a6a9
-   VITE_FIREBASE_STORAGE_BUCKET=pasada-6a6a9.firebasestorage.app
-   VITE_FIREBASE_MESSAGING_SENDER_ID=508714010986
-   VITE_FIREBASE_APP_ID=1:508714010986:web:0128378e2b34bde001bd13
-   ```
+- This prototype uses **Chipnet test BCH**, not real money.
+- CashScript enforces financial transaction rules, but it cannot prove that a physical ride happened. The current app workflow calls settlement when the driver marks arrival; a production service should add dispute handling, driver accountability, and stronger trip evidence.
+- BCH contracts are passive: `timeoutRefund` becomes valid at the deadline but must still be broadcast by a client or a scheduled backend worker. The app checks timeouts while an app is open; production deployment should add that scheduled worker.
+- Browser local storage is suitable for a hackathon prototype, but a production app needs a hardened wallet/key-recovery model and a professional security review.
 
-4. **Start the Development Server**:
-   ```bash
-   npm run dev
-   ```
+## Recommended pre-judging demo
 
-5. **Open Applications**:
-   - Preview Panel / Local URL: `http://localhost:8443` (or Vite assigned port).
-   - Use the top role switcher bar to toggle between **Passenger App**, **Driver App**, and **Admin Console**.
+1. Open the Driver app, create or sign in to a driver account, and switch the driver online.
+2. Open the Passenger app, create or sign in, select a named pickup and destination, choose passenger count, and request a ride.
+3. Accept the request as the driver. Explain that the passenger wallet now funds the contract address, not the driver's address.
+4. Show the funding transaction and the live passenger status. Arrive, verify the PIN, then start the ride.
+5. Show the passenger progress indicator and in-ride chat. Complete the ride as the driver.
+6. Open Activity in either role, then open the settlement transaction in the Chipnet BCH Explorer.
 
----
+For a fast scripted experience, the Passenger app also includes the **Live Ormoc demo** flow. It animates driver approach, PIN verification, trip progress, and settlement using demo state; explain clearly that the standard BCH flow is the one that creates real Chipnet transactions.
 
-## 🔐 BCH wallet
+## Architecture
 
-Signup automatically creates a new P2PKH Chipnet wallet in the browser. Its key remains browser-local; Firebase receives only the address and public key.
-
-PASADA creates browser-local BCH wallets and never requests, receives, transmits, logs, or stores a recovery phrase, WIF, or private key outside that browser.
-
-## 🧪 Testing BCH Faucet & Funding
-
-To test live BCH transactions on Chipnet:
-1. Copy the passenger's CashAddr (e.g. `bchtest:qz9fhmj96grs9dmrdnau9ah07cf5tepngct52n99a4`).
-2. Request testnet funds from the Paytaca Chipnet Faucet: [faucet.paytaca.com](https://faucet.paytaca.com/).
-3. Click **Sync wallet** in the Passenger App to update the live satoshi balance.
-
----
-
-## 📜 Project Structure
-
-```
-PasadaAdmin/
-├── src/
-│   ├── apps/
-│   │   ├── admin/          # Admin Console dashboard & fare config
-│   │   ├── driver/         # Driver mobile app & radar scanner
-│   │   └── passenger/      # Passenger booking, wallet & ratings
-│   ├── components/         # MapCanvas, PhoneFrame, UI components
-│   ├── lib/
-│   │   ├── auth.ts         # User auth, wallet persistence & non-blocking load
-│   │   ├── bch-tx-builder.ts # Pure TypeScript BCH P2PKH transaction builder
-│   │   ├── bch-wallet.ts   # Fulcrum WSS client & Web Crypto SHA-256 scripthash
-│   │   ├── fare.ts         # Ormoc City fare calculation & satoshi conversion
-│   │   ├── firebase.ts     # Firebase App & Auth role-scoped instances
-│   │   ├── geo.ts          # Ormoc City landmarks & distance math
-│   │   ├── platform-service.ts # Admin platform ledger & fee account
-│   │   └── ride-service.ts # Realtime Database dispatch, acceptance & completion
-│   ├── App.tsx             # Main entry point with role switching shell
-│   └── main.tsx            # React DOM root mounting & unhandled rejection handlers
-├── package.json
-├── vite.config.ts
-└── README.md
+```text
+React + TypeScript mobile web apps
+        |
+        +-- Firebase Authentication: role sign-in
+        +-- Firebase Realtime Database: dispatch, ride state, chat, activity indexes
+        |
+        +-- Browser-local BCH wallet: key creation and transaction signatures
+        +-- CashScript + Electrum: ride escrow UTXO, payout, refund, timeout recovery
+        +-- Chipnet BCH Explorer: public transaction verification
 ```
 
----
+## Local setup
 
-## 📄 License
+```bash
+npm install
+copy .env.example .env
+npm run dev
+```
 
-Distributed under the MIT License.
+Set the Firebase values in `.env`, then open the Vite URL shown in the terminal. Compile the CashScript artifact and production bundle with:
+
+```bash
+npm run build
+```
+
+The build runs `npm run contracts:build` first, compiling `contracts/PasadaEscrow.cash` into `src/contracts/PasadaEscrow.json`.
+
+## Project map
+
+```text
+contracts/PasadaEscrow.cash          CashScript contract source
+scripts/compile-contracts.mjs        CashScript artifact compiler
+src/lib/bch-escrow.ts                Contract construction, funding, settlement, refunds
+src/lib/ride-service.ts              Booking states, dispatch, timeout reconciliation
+src/apps/passenger/PassengerApp.tsx  Passenger booking and ride experience
+src/apps/driver/DriverApp.tsx        Driver dispatch and completion experience
+src/apps/admin/AdminApp.tsx          Organizer fare and activity console
+docs/CASHSCRIPT-INTEGRATION.md       Technical guide and judge Q&A
+```
+
+## Technology
+
+React 19, TypeScript, Vite, Tailwind CSS, Firebase Authentication, Firebase Realtime Database, CashScript 0.13, `@bitauth/libauth`, and Electrum Cash network providers.
