@@ -23,7 +23,6 @@ export default function MapCanvas({
   driver = false,
   driverProgress = 0,
   driverPosition,
-  label,
   onPick,
   onRoute,
   showLandmarks = false,
@@ -34,7 +33,6 @@ export default function MapCanvas({
   driver?: boolean
   driverProgress?: number
   driverPosition?: Point
-  label?: string
   onPick?: (point: Point) => void
   onRoute?: (metrics: RouteMetrics) => void
   showLandmarks?: boolean
@@ -234,11 +232,6 @@ export default function MapCanvas({
       {error && (
         <div className="absolute inset-0 grid place-items-center bg-map px-8 text-center">
           <p className="text-[12px] leading-relaxed text-white/80">{error}</p>
-        </div>
-      )}
-      {label && (
-        <div className="pointer-events-none absolute top-4 left-4 rounded-full bg-ink/85 px-3 py-1.5 font-mono text-[10px] tracking-[0.12em] text-white/80 uppercase backdrop-blur">
-          {label}
         </div>
       )}
     </div>

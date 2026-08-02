@@ -6,9 +6,9 @@ export const PESO = 100
 export const DEFAULT_PHP_PER_BCH_CENTAVOS = 12_749 * PESO
 
 export const DEFAULT_FARE_CONFIG: FareConfig = {
-  version: "v5",
+  version: "v6",
   effective: "2026-08-02",
-  seatCapacity: 6,
+  seatCapacity: 4,
   baseDistanceKm: 2.5,
   baseFarePerSeat: 10 * PESO,
   additionalFarePerKmPerSeat: 1.5 * PESO,
@@ -89,7 +89,11 @@ export function calculateFare(
   const farePerSeat =
     config.baseFarePerSeat +
     chargeableExtraKm * config.additionalFarePerKmPerSeat
-  const billableSeats = Math.min(6, Math.max(4, input.passengers))
+  const minimumBuyoutSeats = Math.max(1, Math.trunc(config.seatCapacity))
+  const billableSeats = Math.max(
+    minimumBuyoutSeats,
+    Math.max(1, Math.trunc(input.passengers)),
+  )
 
   const eligible = config.discountsEnabled
     ? Math.min(

@@ -381,7 +381,6 @@ export default function DriverApp({
                 ? (driverRecord?.location ?? driverLocation)
                 : undefined
             }
-            label={online ? "Online · live GPS" : "Offline"}
           />
           <div className="absolute inset-x-0 top-0 h-44 bg-gradient-to-b from-ink/75 to-transparent" />
 
@@ -399,7 +398,7 @@ export default function DriverApp({
                 />
               </span>
               <span className="font-display text-[13px] font-bold">
-                {online ? "Online · Radar active" : "Offline"}
+                {online ? "Available for rides" : "Not accepting rides"}
               </span>
             </span>
             <button
@@ -421,7 +420,7 @@ export default function DriverApp({
               <span className="mx-auto block h-1 w-10 rounded-full bg-ink-100" />
               <div className="mt-3 flex items-center justify-between">
                 <h2 className="font-display text-xl font-extrabold">
-                  {online ? "Radar Active" : "You are offline"}
+                  {online ? "Ready for rides" : "You are offline"}
                 </h2>
                 {online && (
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-pasada-blue/10 px-2.5 py-1 text-[11px] font-semibold text-pasada-blue">
@@ -429,14 +428,14 @@ export default function DriverApp({
                       <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-pasada-blue opacity-75" />
                       <span className="relative inline-flex h-2 w-2 rounded-full bg-pasada-blue" />
                     </span>
-                    Scanning nearby
+                    Looking nearby
                   </span>
                 )}
               </div>
               <p className="mt-1 text-[12px] text-ink-500">
                 {online
-                  ? "Listening for nearby ride requests around your location."
-                  : "Go online to receive nearby booking requests."}
+                  ? "New requests will appear here when passengers book nearby."
+                  : "Go online when you are ready to receive booking requests."}
               </p>
               <div className="mt-4 grid grid-cols-3 gap-px overflow-hidden rounded-xl bg-ink-100 text-center">
                 {[
@@ -508,22 +507,24 @@ export default function DriverApp({
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1.5">
-                <Pill tone="blue">Escrow funded</Pill>
+                <Pill tone="blue">Fare secured</Pill>
                 <Pill tone="outline">
                   {request.passengers} passengers boarding
                 </Pill>
-                <Pill tone="muted">6-seat buyout</Pill>
+                <Pill tone="muted">
+                  {breakdown.billableSeats} seats billed
+                </Pill>
               </div>
 
               <div className="mt-3 divide-y divide-ink-100 rounded-xl bg-ink-50 px-4">
                 <Row
                   label="Passenger pays"
-                  detail="Six-seat buyout + platform fee"
+                  detail={`${breakdown.billableSeats}-seat minimum buyout + fee`}
                   value={formatPeso(breakdown.total)}
                 />
                 <Row
-                  label="PASADA fee"
-                  detail="Included in the passenger's BCH escrow contract."
+                  label="Platform fee"
+                  detail="Included in the passenger's total."
                   value={formatPeso(platformCommission)}
                   tone="platform"
                 />
@@ -594,22 +595,22 @@ export default function DriverApp({
             <div className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-5 pt-4 pb-8">
               <span className="mx-auto block h-1 w-10 rounded-full bg-ink-100" />
               <h2 className="mt-3 font-display text-xl font-extrabold">
-                BCH escrow in progress
+                Payment being secured
               </h2>
               <p className="mt-1 text-[12px] text-ink-500">
                 {missingEscrowContract
                   ? "This ride never funded a BCH contract, so no payout can be released. Cancel this invalid ride and create a new request."
                   : needsSettlementRecovery
-                    ? "This ride was recorded as complete without an on-chain payout. Retry the CashScript settlement."
+                    ? "This ride is complete, but the payout still needs to be sent. Try again shortly."
                     : liveRide?.status === "completing"
-                      ? "Broadcasting the contract settlement to your BCH address."
-                      : liveRide?.paymentStatus === "funding_broadcasting"
-                        ? "Waiting for the passenger wallet to sign and broadcast the contract."
-                        : "Preparing the ride-specific CashScript contract for the passenger wallet."}
+                      ? "Sending your payout to your wallet now."
+                    : liveRide?.paymentStatus === "funding_broadcasting"
+                        ? "Waiting for the passenger to confirm their ride payment."
+                        : "Getting the ride payment ready."}
               </p>
               <div className="mt-4 divide-y divide-ink-100 rounded-xl bg-ink-50 px-4">
                 <Row
-                  label="Contract"
+                  label="Ride payment"
                   value={
                     missingEscrowContract
                       ? "Not funded"
@@ -621,7 +622,7 @@ export default function DriverApp({
                   }
                 />
                 <Row
-                  label="Driver payout"
+                  label="Your earnings"
                   value={formatPeso(driverPayout)}
                   strong
                 />
@@ -870,12 +871,11 @@ export default function DriverApp({
                 Settled in PASADA
               </h2>
               <p className="mt-1 text-[12px] text-ink-500">
-                The CashScript contract broadcast the driver payout to your BCH
-                address.
+                Your earnings have been sent to your wallet.
               </p>
               <div className="mt-4 divide-y divide-ink-100 rounded-xl bg-ink-50 px-4">
                 <Row
-                  label="Driver payout"
+                  label="Your earnings"
                   detail={
                     (account?.bchAddress || driver.bchAddress).slice(0, 24) +
                     "…"
@@ -884,7 +884,7 @@ export default function DriverApp({
                   strong
                 />
                 <Row
-                  label="PASADA commission"
+                  label="Platform fee"
                   value={formatPeso(platformCommission)}
                   tone="platform"
                 />

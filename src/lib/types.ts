@@ -14,6 +14,7 @@ export type DiscountClass = "senior" | "pwd" | "student"
 export interface FareConfig {
   version: string
   effective: string
+  /** Minimum seats billed for a tricycle buyout; declared riders above this are added individually. */
   seatCapacity: number
   baseDistanceKm: number
   /** Centavos. */
@@ -55,7 +56,7 @@ export interface FareLine {
 export interface FareBreakdown {
   config: FareConfig
   input: FareInput
-  /** Seats charged for this booking: four minimum, then each declared rider up to six. */
+  /** Seats charged: the configured minimum buyout or the declared rider count, whichever is higher. */
   billableSeats: number
   chargeableExtraKm: number
   farePerSeat: number

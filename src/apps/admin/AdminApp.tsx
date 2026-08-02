@@ -26,13 +26,15 @@ import {
   calculateFare,
   formatBchFromSats,
   formatPeso,
+  isNightHour,
   PESO,
   satoshisToCentavos,
   settlementOutputs,
   toSatoshis,
 } from "../../lib/fare"
 import {
-  setPlatformBchAddress,
+  platformFeeAddress,
+  setPlatformFeeAddress,
   subscribePlatformAccount,
   subscribePlatformMetrics,
   type PlatformAccount,
@@ -233,6 +235,7 @@ export default function AdminApp({
           <ContractSection
             fareConfig={fareConfig}
             platformAccount={platformAccount}
+            metrics={metrics}
           />
         )}
       </main>
@@ -281,7 +284,7 @@ function Dashboard({
   const drivers = overview.users.filter((user) => user.kind === "driver").length
 
   useEffect(() => {
-    const address = account?.bchAddress
+    const address = platformFeeAddress(account)
     if (!address) {
       setIssuerBalance(null)
       setIssuerBalanceError("")
@@ -306,7 +309,7 @@ function Dashboard({
       active = false
       window.clearInterval(timer)
     }
-  }, [account?.bchAddress])
+  }, [account?.bchAddress, account?.feeAddress])
 
   return (
     <>
@@ -458,7 +461,7 @@ function Dashboard({
           <div className="rounded-xl bg-white p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <SectionLabel>Platform commission wallet</SectionLabel>
+                <SectionLabel>Platform fee wallet</SectionLabel>
                 <p className="mt-2 font-display text-[14px] font-bold">
                   {account?.displayName ?? "Loading account"}
                 </p>
@@ -471,10 +474,10 @@ function Dashboard({
                 : `${issuerBalance.toLocaleString()} sats`}
             </p>
             <p className="mt-1 text-[10px] text-ink-400">
-              Confirmed, spendable BCH at the commission address
+              Confirmed, spendable BCH at the fee address
             </p>
             <p className="num mt-2 break-all text-[9px] leading-relaxed text-ink-300">
-              {account?.bchAddress ?? "No address configured"}
+              {account ? platformFeeAddress(account) : "No address configured"}
             </p>
             {issuerBalanceError && (
               <p className="mt-2 text-[10px] text-pasada-red">
@@ -1020,7 +1023,7 @@ function FareSection({
         passengers: 2,
         discountedSeats: 0,
         specialTrip: false,
-        nightTrip: false,
+        nightTrip: isNightHour(draft),
       }),
     [draft, previewKm],
   )
@@ -1077,15 +1080,15 @@ function FareSection({
           <Panel title="Capacity & distance">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field
-                label="Fixed tricycle capacity"
-                hint="Used as the fare multiplier."
+                label="Minimum buyout (seats)"
+                hint="Riders at or below this number are billed at the minimum; additional riders are added one-for-one."
               >
                 <TextInput
                   mono
                   value={inputs.seatCapacity ?? String(draft.seatCapacity)}
                   onChange={(val) =>
                     updateField("seatCapacity", val, (v) =>
-                      Math.max(0, parseInt(v, 10) || 0),
+                      Math.max(1, parseInt(v, 10) || 1),
                     )
                   }
                 />
@@ -1302,16 +1305,16 @@ function FareSection({
 
 function validateFareConfig(config: FareConfig) {
   if (config.seatCapacity < 1 || config.seatCapacity > 12)
-    throw new Error("Seat capacity must be between 1 and 12.")
+    throw new Error("Minimum buyout must be between 1 and 12 seats.")
   if (config.baseDistanceKm <= 0 || config.baseDistanceKm > 50)
     throw new Error("Base distance must be between 0 and 50 km.")
   if (config.discountPercent < 0 || config.discountPercent > 100)
     throw new Error("Discount percent must be between 0 and 100.")
   if (
     config.maxDiscountedSeats < 0 ||
-    config.maxDiscountedSeats > config.seatCapacity
+    config.maxDiscountedSeats > 12
   )
-    throw new Error("Maximum discounted seats cannot exceed vehicle capacity.")
+    throw new Error("Maximum discounted seats must be between 0 and 12.")
   if (
     [config.nightStartHour, config.nightEndHour].some(
       (hour) => hour < 0 || hour > 23 || !Number.isInteger(hour),
@@ -1594,11 +1597,11 @@ function CashTokenHub({
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,.8fr)]">
         <div className="space-y-5">
-          <Panel title="Platform commission wallet & token genesis">
+          <Panel title="Platform fee wallet & token genesis">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <p className="font-mono text-[9px] tracking-[0.12em] text-ink-300 uppercase">
-                  Chipnet commission address
+                  Chipnet fee address
                 </p>
                 <p className="num mt-1 break-all text-[11px] text-pasada-blue">
                   {issuerAddress || "No secured issuer wallet"}
@@ -2029,40 +2032,67 @@ function TokenStat({
 function ContractSection({
   fareConfig,
   platformAccount,
+  metrics,
 }: {
   fareConfig: FareConfig
   platformAccount: PlatformAccount | null
+  metrics: PlatformMetrics
 }) {
   const [commissionAddr, setCommissionAddr] = useState(
-    platformAccount?.bchAddress ?? "",
+    platformFeeAddress(platformAccount),
   )
   const [addressMessage, setAddressMessage] = useState("")
   const [savingAddress, setSavingAddress] = useState(false)
   const [config, setConfig] = useState<ContractConfig>({
     network: "chipnet",
-    releaseCondition: "pin",
-    expiryMinutes: 20,
+    expiryMinutes: 30,
     updatedAt: 0,
     updatedBy: "",
   })
-  const [release, setRelease] =
-    useState<ContractConfig["releaseCondition"]>("pin")
-  const [expiry, setExpiry] = useState("20")
+  const [expiry, setExpiry] = useState("30")
   const [savingConfig, setSavingConfig] = useState(false)
   const [configMessage, setConfigMessage] = useState("")
+  const [walletBalance, setWalletBalance] = useState<number | null>(null)
+  const [walletBalanceError, setWalletBalanceError] = useState("")
   useEffect(
-    () => setCommissionAddr(platformAccount?.bchAddress ?? ""),
-    [platformAccount?.bchAddress],
+    () => setCommissionAddr(platformFeeAddress(platformAccount)),
+    [platformAccount?.bchAddress, platformAccount?.feeAddress],
   )
   useEffect(
     () =>
       subscribeContractConfig((next) => {
         setConfig(next)
-        setRelease(next.releaseCondition)
         setExpiry(String(next.expiryMinutes))
       }),
     [],
   )
+  useEffect(() => {
+    const address = platformFeeAddress(platformAccount)
+    if (!address) {
+      setWalletBalance(null)
+      setWalletBalanceError("")
+      return
+    }
+    let active = true
+    const refresh = async () => {
+      try {
+        const snapshot = await fetchCashTokenWalletSnapshot(address)
+        if (!active) return
+        setWalletBalance(snapshot.bchSats)
+        setWalletBalanceError("")
+      } catch {
+        if (!active) return
+        setWalletBalance(null)
+        setWalletBalanceError("Could not read the current Chipnet balance.")
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 15_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [platformAccount?.bchAddress, platformAccount?.feeAddress])
   const sample = calculateFare(fareConfig, {
     tripDistanceKm: 3.2,
     passengers: 2,
@@ -2075,7 +2105,7 @@ function ContractSection({
     setSavingAddress(true)
     setAddressMessage("")
     try {
-      await setPlatformBchAddress(commissionAddr)
+      await setPlatformFeeAddress(commissionAddr)
       setAddressMessage("Platform Chipnet address saved.")
     } catch (error) {
       setAddressMessage(
@@ -2092,10 +2122,9 @@ function ContractSection({
     setConfigMessage("")
     try {
       await saveContractConfig({
-        releaseCondition: release,
         expiryMinutes: Number(expiry),
       })
-      setConfigMessage("Contract operations settings saved to Firebase.")
+      setConfigMessage("Refund window saved. New bookings will use it.")
     } catch (error) {
       setConfigMessage(
         error instanceof Error
@@ -2110,13 +2139,13 @@ function ContractSection({
     <>
       <Header
         title="BCH contract control"
-        sub="Manage the public platform address and versioned operational rules used around PASADA's CashScript escrow. The blockchain network is locked to Chipnet."
+        sub="Set the wallet that receives PASADA fees and choose how long a new ride can remain unresolved before its safe automatic refund becomes available."
       />
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
         <div className="space-y-5">
-          <Panel title="Platform commission wallet">
+          <Panel title="Platform fee wallet">
             <Field
-              label="Chipnet commission address"
+              label="Chipnet fee address"
               hint="Must begin with bchtest:. Private keys are never accepted by the admin console."
             >
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -2136,6 +2165,37 @@ function ContractSection({
                 </Button>
               </div>
             </Field>
+            <div className="mt-4 grid gap-px overflow-hidden rounded-xl bg-ink-100 sm:grid-cols-2">
+              <div className="bg-ink-50 px-4 py-3">
+                <p className="font-mono text-[9px] tracking-[0.12em] text-ink-500 uppercase">
+                  Current wallet balance
+                </p>
+                <p className="num mt-1 text-lg font-medium text-pasada-blue">
+                  {walletBalance === null
+                    ? "Checking..."
+                    : `${walletBalance.toLocaleString()} sats`}
+                </p>
+                <p className="mt-0.5 text-[10px] text-ink-400">
+                  Spendable BCH at this address
+                </p>
+              </div>
+              <div className="bg-ink-50 px-4 py-3">
+                <p className="font-mono text-[9px] tracking-[0.12em] text-ink-500 uppercase">
+                  Fees earned
+                </p>
+                <p className="num mt-1 text-lg font-medium">
+                  {metrics.totalPlatformFeeSats.toLocaleString()} sats
+                </p>
+                <p className="mt-0.5 text-[10px] text-ink-400">
+                  From completed rides in PASADA
+                </p>
+              </div>
+            </div>
+            {walletBalanceError && (
+              <p className="mt-2 text-[10px] text-pasada-red">
+                {walletBalanceError}
+              </p>
+            )}
             {addressMessage && (
               <p
                 className={`mt-2 text-[11px] ${
@@ -2148,37 +2208,18 @@ function ContractSection({
               </p>
             )}
           </Panel>
-          <Panel title="Escrow operations">
+          <Panel title="Automatic refund safeguard">
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Release workflow">
-                <div className="flex flex-wrap gap-1.5">
-                  {(["pin", "both", "timeout"] as const).map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => setRelease(item)}
-                      className={`rounded-full border px-3 py-1.5 text-[11px] capitalize transition-colors ${
-                        release === item
-                          ? "border-ink bg-ink text-white"
-                          : "border-ink-100 text-ink-500 hover:border-ink-300"
-                      }`}
-                    >
-                      {item === "pin"
-                        ? "PIN verified"
-                        : item === "both"
-                          ? "Both confirm"
-                          : "Timeout release"}
-                    </button>
-                  ))}
-                </div>
-              </Field>
               <Field
-                label="Ride expiration (minutes)"
+                label="Refund window (minutes)"
                 hint="Allowed range: 5–120 minutes."
               >
                 <TextInput mono value={expiry} onChange={setExpiry} />
               </Field>
             </div>
+            <p className="mt-3 rounded-lg bg-pasada-blue/8 px-3 py-2.5 text-[11px] leading-relaxed text-ink-500">
+              This controls the on-chain refund deadline for newly accepted rides. It does not change escrows that are already funded.
+            </p>
             {configMessage && (
               <p
                 className={`mt-3 rounded-xl px-3 py-2.5 text-[11px] ${
@@ -2245,7 +2286,7 @@ function ContractSection({
                 ["Passenger funds ride", "Ride-specific CashScript UTXO"],
                 [
                   "Driver completes verified ride",
-                  "Driver payout + PASADA commission",
+                  "Driver payout + PASADA platform fee",
                 ],
                 [
                   "Passenger cancellation",
@@ -2270,7 +2311,7 @@ function ContractSection({
             <div className="mt-4 space-y-3">
               {[
                 ["Driver payout", driverPayout, "bg-pasada-blue"],
-                ["Platform commission", platformCommission, "bg-pasada-red"],
+                ["Platform fee", platformCommission, "bg-pasada-red"],
               ].map(([label, amount, bar]) => (
                 <div key={label as string}>
                   <div className="flex justify-between gap-3">

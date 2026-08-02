@@ -34,7 +34,11 @@ import {
   recordCouponRedemption,
 } from "./cashtoken-service"
 import { DEMO_DRIVER_START, distanceKm, interpolatePoint } from "./geo"
-import { ensurePlatformState, PLATFORM_ACCOUNT_ID } from "./platform-service"
+import {
+  ensurePlatformState,
+  platformFeeAddress,
+  PLATFORM_ACCOUNT_ID,
+} from "./platform-service"
 import type {
   FareConfig,
   GeoPoint,
@@ -108,6 +112,22 @@ type RideInput = {
 
 function roleDatabase(role: AppRole): Database {
   return getScopedFirebase(role).database
+}
+
+/** Reads the admin-selected timeout for new escrows without trusting it blindly. */
+async function configuredEscrowRefundTimeoutSeconds(
+  db: Database,
+): Promise<number> {
+  try {
+    const snapshot = await get(ref(db, "platform/contractConfig/expiryMinutes"))
+    const configuredMinutes = Number(snapshot.val())
+    const minutes = Number.isFinite(configuredMinutes)
+      ? Math.min(120, Math.max(5, configuredMinutes))
+      : ESCROW_REFUND_TIMEOUT_SECONDS / 60
+    return Math.round(minutes * 60)
+  } catch {
+    return ESCROW_REFUND_TIMEOUT_SECONDS
+  }
 }
 
 async function linkedWalletWif(
@@ -579,7 +599,7 @@ export async function createRide(input: RideInput): Promise<string> {
     driverPayoutSats,
     requestExpiresAt: now + BOOKING_REQUEST_TIMEOUT_MS,
     platformAccountId: PLATFORM_ACCOUNT_ID,
-    platformBchAddress: platformAccount?.bchAddress ?? null,
+    platformBchAddress: platformFeeAddress(platformAccount),
     ...(input.appliedCoupon
       ? {
           appliedCoupon: input.appliedCoupon,
@@ -834,8 +854,12 @@ export async function acceptRide(
       )
     }
     const driverAddress = ride.driver?.bchAddress ?? ""
-    const platformAddress = String(
-      (await get(ref(db, "platform/account/bchAddress"))).val() ?? "",
+    const platformAccountSnapshot = await get(ref(db, "platform/account"))
+    const platformAddress = platformFeeAddress(
+      platformAccountSnapshot.val() as {
+        bchAddress?: string | null
+        feeAddress?: string | null
+      } | null,
     )
     if (!driverAddress || !platformAddress) {
       throw new Error(
@@ -848,6 +872,7 @@ export async function acceptRide(
         "The driver's BCH address has not completed ownership verification.",
       )
     }
+    const refundTimeoutSeconds = await configuredEscrowRefundTimeoutSeconds(db)
     const escrow = prepareEscrowDescriptor({
       passengerAddress: ride.passengerBchAddress,
       passengerPublicKey: ride.passengerPublicKey,
@@ -857,10 +882,10 @@ export async function acceptRide(
       driverPayoutSats: ride.driverPayoutSats,
       platformFeeSats: ride.platformFeeSats,
       // The descriptor is created before funding. Add the funding window so a
-      // funded ride still has a full 30-minute recovery window afterwards.
+      // funded ride still has the admin-configured recovery window afterwards.
       refundLocktime: Math.floor(
         (now + FUNDING_TIMEOUT_MS) / 1_000,
-      ) + ESCROW_REFUND_TIMEOUT_SECONDS,
+      ) + refundTimeoutSeconds,
     })
 
     await update(ref(db, `rides/${rideId}`), {

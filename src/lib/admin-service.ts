@@ -35,7 +35,7 @@ export type AdminOverview = {
 
 export type ContractConfig = {
   network: "chipnet"
-  releaseCondition: "pin" | "both" | "timeout"
+  /** Public timeout-refund window used for new CashScript escrow contracts. */
   expiryMinutes: number
   updatedAt: number
   updatedBy: string
@@ -226,10 +226,7 @@ export function subscribeContractConfig(
     const value = snapshot.val() as Partial<ContractConfig> | null
     onConfig({
       network: "chipnet",
-      releaseCondition: ["pin", "both", "timeout"].includes(String(value?.releaseCondition))
-        ? value!.releaseCondition as ContractConfig["releaseCondition"]
-        : "pin",
-      expiryMinutes: Math.min(120, Math.max(5, Number(value?.expiryMinutes ?? 20))),
+      expiryMinutes: Math.min(120, Math.max(5, Number(value?.expiryMinutes ?? 30))),
       updatedAt: Number(value?.updatedAt ?? 0),
       updatedBy: String(value?.updatedBy ?? ""),
     })
@@ -237,7 +234,7 @@ export function subscribeContractConfig(
 }
 
 export async function saveContractConfig(
-  value: Pick<ContractConfig, "releaseCondition" | "expiryMinutes">,
+  value: Pick<ContractConfig, "expiryMinutes">,
 ) {
   const expiryMinutes = Math.min(120, Math.max(5, Math.round(value.expiryMinutes)))
   const now = Date.now()
@@ -245,7 +242,6 @@ export async function saveContractConfig(
   if (!adminUid) throw new Error("Log in as an administrator first.")
   const config: ContractConfig = {
     network: "chipnet",
-    releaseCondition: value.releaseCondition,
     expiryMinutes,
     updatedAt: now,
     updatedBy: adminUid,

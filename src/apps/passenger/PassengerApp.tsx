@@ -14,7 +14,7 @@ import QRCode from "../../components/QRCode"
 import RideReceiptModal from "../../components/RideReceiptModal"
 import RideChat from "../../components/RideChat"
 import { BottomNav, Icons, PhoneFrame } from "../../components/PhoneFrame"
-import { Button, Pill, Row, SectionLabel, Toggle } from "../../components/ui"
+import { Button, Pill, Row, SectionLabel } from "../../components/ui"
 import {
   calculateFare,
   formatBchFromSats,
@@ -129,13 +129,19 @@ export default function PassengerApp({
   )
   const [durationMin, setDurationMin] = useState(8)
   const [passengers, setPassengers] = useState(2)
-  const [nightTrip, setNightTrip] = useState(() => isNightHour(fareConfig))
+  const [fareClock, setFareClock] = useState(() => Date.now())
 
   /** Config captured at confirmation — later admin edits must not touch it. */
   const [locked, setLocked] = useState<FareConfig | null>(null)
 
   const activeConfig = locked ?? fareConfig
+  const nightTrip = isNightHour(activeConfig, new Date(fareClock))
   const discountedSeats = 0
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setFareClock(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const breakdown = useMemo(
     () =>
@@ -380,7 +386,7 @@ export default function PassengerApp({
       passengers: 2,
       discountedSeats: 0,
       specialTrip: false,
-      nightTrip: false,
+      nightTrip: isNightHour(fareConfig),
     })
     setServiceError("")
     setLocked(fareConfig)
@@ -396,8 +402,6 @@ export default function PassengerApp({
     setPassengers(2)
     setClasses([])
     setSpecialTrip(false)
-    setNightTrip(false)
-
     try {
       const demoDriverAccount = await loadPasadaAccount("driver")
       const nextRideId = await createRide({
@@ -411,7 +415,7 @@ export default function PassengerApp({
         passengers: 2,
         discountedSeats: 0,
         specialTrip: false,
-        nightTrip: false,
+        nightTrip: isNightHour(fareConfig),
         total: demoBreakdown.total,
         transportationFare: demoBreakdown.transportationFare,
         platformFee: demoBreakdown.platformFee,
@@ -486,8 +490,6 @@ export default function PassengerApp({
           }}
           passengers={passengers}
           setPassengers={setPassengers}
-          nightTrip={nightTrip}
-          setNightTrip={setNightTrip}
           breakdown={breakdown}
           prcConfig={prcConfig}
           prcBalance={prcBalance}
@@ -771,8 +773,6 @@ type BookingProps = {
   onRoute: (distanceKm: number, durationMin: number) => void
   passengers: number
   setPassengers: (v: number) => void
-  nightTrip: boolean
-  setNightTrip: (v: boolean) => void
   breakdown: ReturnType<typeof calculateFare>
   prcConfig: CashTokenConfig | null
   prcBalance: number
@@ -828,7 +828,6 @@ function BookingScreen(p: BookingProps) {
         onRoute={(metrics) =>
           p.onRoute(metrics.distanceKm, metrics.durationMin)
         }
-        label={picking ? "Tap to set drop-off" : "Route preview"}
       />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-ink/70 to-transparent" />
 
@@ -977,7 +976,7 @@ function BookingScreen(p: BookingProps) {
             <div className="flex items-baseline justify-between">
               <SectionLabel>Passengers boarding</SectionLabel>
               <span className="text-[10px] text-ink-300">
-                Does not change the fare
+                Minimum buyout: {p.breakdown.config.seatCapacity} seats
               </span>
             </div>
             <div className="mt-2 grid grid-cols-6 gap-1.5">
@@ -996,14 +995,6 @@ function BookingScreen(p: BookingProps) {
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="rounded-xl bg-ink-50 px-4 py-1">
-            <Toggle
-              on={p.nightTrip}
-              onChange={p.setNightTrip}
-              label="Night trip (9PM – 5AM)"
-            />
           </div>
 
           {p.prcConfig && (
@@ -1067,13 +1058,12 @@ function BookingScreen(p: BookingProps) {
           </div>
 
           <FareBreakdownList breakdown={p.breakdown} method="bch" />
-          <BuyoutNotice />
+          <BuyoutNotice minimumSeats={p.breakdown.config.seatCapacity} />
           <p className="rounded-lg bg-pasada-blue/8 px-3 py-2.5 text-[11px] leading-relaxed text-ink-500">
-            BCH network reserve:{" "}
+            Payment processing reserve:{" "}
             {formatBchFromSats(ESCROW_FUNDING_FEE_RESERVE_SATS * 2)} BCH. One
-            1,000-sat reserve is held in the contract for its release
-            transaction; the other covers the funding transaction&apos;s miner
-            fee and any unused amount stays in your change.
+            small reserve helps complete your payment securely; any unused
+            amount stays in your wallet.
           </p>
 
           {insufficient && (
@@ -1196,13 +1186,6 @@ function RideScreen({
         driver={status !== "funding" && status !== "searching"}
         driverProgress={status === "in_transit" ? (ride?.progress ?? 0) : 0.18}
         driverPosition={ride?.driver?.location}
-        label={
-          status === "in_transit"
-            ? "En route to destination"
-            : status === "searching"
-              ? "Finding a tricycle"
-              : "Ormoc City"
-        }
       />
       <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-ink/70 to-transparent" />
 
@@ -1212,13 +1195,12 @@ function RideScreen({
         <div className="mt-3 flex items-center gap-2">
           <Pill tone={escrowFunded ? "blue" : "muted"}>
             {escrowFunded
-              ? "Escrow funded"
+              ? "Fare secured"
               : status === "searching"
-                ? "Awaiting driver"
-                : "Escrow pending"}
+                ? "Finding your driver"
+                : "Securing fare"}
           </Pill>
-          <Pill tone="outline">Config {breakdown.config.version}</Pill>
-          {ride?.demoMode && <Pill tone="red">Live Ormoc demo</Pill>}
+          {ride?.demoMode && <Pill tone="red">Guided demo</Pill>}
         </div>
 
         {ride && <RideChat role="passenger" account={account} ride={ride} />}
@@ -1226,23 +1208,23 @@ function RideScreen({
         {status === "funding" && (
           <>
             <h2 className="mt-3 font-display text-xl font-extrabold">
-              Funding BCH escrow
+              Securing your fare
             </h2>
             <p className="mt-1 text-[12px] text-ink-500">
               {ride?.paymentStatus === "funding_broadcasting"
-                ? "Your passenger wallet is signing and broadcasting this ride's CashScript contract."
-                : "Your passenger wallet will fund this ride's CashScript contract from this browser. Your wallet display updates after broadcast."}
+                ? "Confirming your ride payment now. This usually takes only a moment."
+                : "Your fare is being set aside safely until the ride is complete or cancelled."}
             </p>
             <div className="mt-4 space-y-0 divide-y divide-ink-100 rounded-xl bg-ink-50 px-4">
               <Row
-                label="Escrow contract"
+                label="Ride payment"
                 value={ride?.escrow?.contractAddress ? "Prepared" : "Preparing"}
               />
               <Row
-                label="Release condition"
-                value="Driver signature + fixed outputs"
+                label="After your ride"
+                value="Driver is paid"
               />
-              <Row label="Refund condition" value="Passenger signature" />
+              <Row label="If you cancel" value="Fare returns to you" />
             </div>
             {fundingError && (
               <p className="mt-3 rounded-lg bg-pasada-red/10 px-3 py-2.5 text-[12px] text-pasada-red">
@@ -1265,7 +1247,7 @@ function RideScreen({
               Finding a tricycle…
             </h2>
             <p className="mt-1 text-[12px] text-ink-500">
-              Broadcasting to approved drivers near {from}.
+              Looking for an available driver near {from}.
             </p>
             <p className="mt-1 text-[10px] text-ink-400">
               This request closes automatically if no driver accepts in time.
@@ -1354,7 +1336,7 @@ function RideScreen({
               <Button full disabled>
                 {progress < 0.98
                   ? `Arriving · ${progressPercent}%`
-                  : "Confirm arrival & release payment"}
+                  : "Almost there"}
               </Button>
             </div>
           </>
@@ -1366,16 +1348,15 @@ function RideScreen({
               Ride complete
             </h2>
             <p className="mt-1 text-[12px] text-ink-500">
-              The CashScript escrow released the driver payout and PASADA fee
-              on-chain.
+              Your driver has been paid and your trip receipt is ready.
             </p>
             <div className="mt-4 divide-y divide-ink-100 rounded-xl bg-ink-50 px-4">
               <Row
-                label="Driver payout"
+                label="Driver payment"
                 value={formatPeso(breakdown.total - breakdown.platformFee)}
               />
               <Row
-                label="PASADA commission"
+                label="Platform fee"
                 value={formatPeso(breakdown.platformFee)}
                 tone="platform"
               />
@@ -1417,8 +1398,8 @@ function RideScreen({
             </h2>
             <p className="mt-1 text-[12px] text-ink-500">
               {ride?.escrow?.fundingTxid
-                ? "The driver was released and the BCH escrow refund was broadcast to your linked address."
-                : "The driver was released before BCH escrow funding. No funds left your wallet."}
+                ? "Your fare has been returned to your wallet."
+                : "No payment was taken from your wallet."}
             </p>
             <div className="mt-4">
               <Button full onClick={onDone}>

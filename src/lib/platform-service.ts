@@ -12,12 +12,17 @@ import { getScopedFirebase, type FirebaseScope } from "./firebase"
 import type { FareConfig, LiveRide } from "./types"
 
 export const PLATFORM_ACCOUNT_ID = "pasada-platform"
+export const DEFAULT_PLATFORM_FEE_ADDRESS =
+  "bchtest:qr86rw9jc3zmd4h32k9u0qhjzplykn9n9cmwnjkau4"
 
 export type PlatformAccount = {
   id: typeof PLATFORM_ACCOUNT_ID
   role: "admin"
   displayName: string
+  /** Wallet used by the CashToken issuer. Kept separate from ride fees. */
   bchAddress: string | null
+  /** Public wallet that receives PASADA's share of completed ride payments. */
+  feeAddress?: string | null
   createdAt: number
   updatedAt: number
   balance: {
@@ -45,9 +50,10 @@ function defaultAccount(now: number): PlatformAccount {
     id: PLATFORM_ACCOUNT_ID,
     role: "admin",
     displayName: "PASADA Platform Administrator",
-    // The administrator must create this wallet in the Admin browser so the
-    // corresponding signing key is never generated and discarded elsewhere.
     bchAddress: null,
+    // The public Chipnet address where PASADA's share of completed rides is
+    // collected. It can still be changed by an authenticated administrator.
+    feeAddress: DEFAULT_PLATFORM_FEE_ADDRESS,
     createdAt: now,
     updatedAt: now,
     balance: {
@@ -67,10 +73,17 @@ export async function ensurePlatformState(): Promise<void> {
     (current: Record<string, unknown> | null) => {
       const existingAccount = (current?.account ??
         null) as PlatformAccount | null
-      const account =
-        existingAccount && existingAccount.bchAddress
-          ? existingAccount
-          : defaultAccount(now)
+      const account = existingAccount
+        ? {
+            ...defaultAccount(now),
+            ...existingAccount,
+            // Existing deployments used bchAddress for both the token issuer
+            // and fee collection. Preserve the issuer while migrating ride
+            // fees to their dedicated wallet.
+            feeAddress:
+              existingAccount.feeAddress ?? DEFAULT_PLATFORM_FEE_ADDRESS,
+          }
+        : defaultAccount(now)
       if (!current) return { account, fareConfig: DEFAULT_FARE_CONFIG }
       return {
         ...current,
@@ -128,30 +141,22 @@ export function subscribePlatformAccount(
   })
 }
 
-export async function setPlatformBchAddress(value: string): Promise<void> {
+export function platformFeeAddress(
+  account: Pick<PlatformAccount, "bchAddress" | "feeAddress"> | null | undefined,
+): string {
+  return account?.feeAddress ?? account?.bchAddress ?? DEFAULT_PLATFORM_FEE_ADDRESS
+}
+
+export async function setPlatformFeeAddress(value: string): Promise<void> {
   const address = value.trim()
   const adminUid = getScopedFirebase("admin").auth.currentUser?.uid
   if (!adminUid)
     throw new Error(
       "Log in as an administrator before changing the platform wallet.",
     )
-  const tokenConfigSnapshot = await get(
-    ref(database("admin"), "platform/cashtoken/config"),
-  )
-  const lockedIssuerAddress = String(
-    tokenConfigSnapshot.val()?.issuerAddress ?? "",
-  )
-  if (
-    lockedIssuerAddress &&
-    address.toLowerCase() !== lockedIssuerAddress.toLowerCase()
-  ) {
-    throw new Error(
-      "The platform wallet is locked because it controls the initialized PRC token reserve.",
-    )
-  }
   if (!address) {
     await update(ref(database("admin"), "platform/account"), {
-      bchAddress: null,
+      feeAddress: null,
       updatedAt: Date.now(),
     })
     return
@@ -163,11 +168,11 @@ export async function setPlatformBchAddress(value: string): Promise<void> {
   }
   const now = Date.now()
   await update(ref(database("admin"), "platform/account"), {
-    bchAddress: validated.address,
+    feeAddress: validated.address,
     updatedAt: now,
   })
   await update(ref(database("admin"), `adminAudit/${now}_platform_wallet`), {
-    action: "platform_wallet_updated",
+    action: "platform_fee_wallet_updated",
     address: validated.address,
     adminUid,
     createdAt: now,

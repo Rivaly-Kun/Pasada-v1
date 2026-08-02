@@ -72,11 +72,12 @@ export default function FareBreakdownList({
   )
 }
 
-export function BuyoutNotice() {
+export function BuyoutNotice({ minimumSeats }: { minimumSeats: number }) {
   return (
     <p className="mt-3 border-l-2 border-pasada-red bg-pasada-red/6 px-3 py-2.5 text-[11px] leading-relaxed text-ink-700">
-      This is an exclusive tricycle booking. The fare includes four seats for
-      up to four passengers, then adds a seat for each fifth or sixth passenger.
+      This is an exclusive tricycle booking. The fare includes a minimum of {" "}
+      {minimumSeats} seats, then adds a seat for every passenger above that
+      minimum.
     </p>
   )
 }
