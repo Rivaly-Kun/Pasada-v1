@@ -4,6 +4,8 @@
 
 PASADA helps passengers request a tricycle, lets registered drivers accept nearby requests, and holds a BCH fare in a ride-specific CashScript contract until the ride is completed or refunded. It is a working web-app prototype built for Chipnet, the BCH test network.
 
+**Presentation:** [View the PASADA slides](https://pasada-slides.figma.site/)
+
 ## Pre-judging summary
 
 | Question | PASADA's answer |
@@ -83,14 +85,16 @@ Read the technical implementation and judge Q&A in [docs/CASHSCRIPT-INTEGRATION.
 
 ## Recommended pre-judging demo
 
-1. Open the Driver app, create or sign in to a driver account, and switch the driver online.
-2. Open the Passenger app, create or sign in, select a named pickup and destination, choose passenger count, and request a ride.
-3. Accept the request as the driver. Explain that the passenger wallet now funds the contract address, not the driver's address.
-4. Show the funding transaction and the live passenger status. Arrive, verify the PIN, then start the ride.
-5. Show the passenger progress indicator and in-ride chat. Complete the ride as the driver.
-6. Open Activity in either role, then open the settlement transaction in the Chipnet BCH Explorer.
+1. Start the three local app windows described in [Running the three roles locally](#running-the-three-roles-locally). Use separate browser profiles or incognito windows so the Passenger, Driver, and Admin sessions do not overwrite each other.
+2. Create a fresh passenger account. The reviewer must fund **their own newly created passenger Chipnet wallet** with test BCH before requesting a blockchain ride. PASADA does not provide a shared or pre-funded wallet. Copy the `bchtest:` address from the Passenger wallet, get Chipnet test BCH from a faucet such as [Paytaca's Chipnet Faucet](https://faucet.paytaca.com/), then use **Sync wallet** to confirm the balance.
+3. Create or sign in to a driver account, then switch the driver online. The driver and organizer accounts do not need BCH to accept a booking; the passenger provides the escrow amount.
+4. As passenger, select a named pickup and destination, choose passenger count, and request a ride.
+5. Accept the request as the driver. Explain that the passenger wallet now funds the contract address, not the driver's address.
+6. Show the funding transaction and the live passenger status. Arrive, verify the PIN, then start the ride.
+7. Show the passenger progress indicator and in-ride chat. Complete the ride as the driver.
+8. Open Activity in either role, then open the settlement transaction in the Chipnet BCH Explorer.
 
-For a fast scripted experience, the Passenger app also includes the **Live Ormoc demo** flow. It animates driver approach, PIN verification, trip progress, and settlement using demo state; explain clearly that the standard BCH flow is the one that creates real Chipnet transactions.
+The **Live Ormoc demo** is only a scripted UI walkthrough. It does not replace the funded-wallet flow above and does not create a reviewer-owned BCH transaction.
 
 ## Architecture
 
@@ -120,6 +124,31 @@ npm run build
 ```
 
 The build runs `npm run contracts:build` first, compiling `contracts/PasadaEscrow.cash` into `src/contracts/PasadaEscrow.json`.
+
+## Running the three roles locally
+
+Run three development servers in three PowerShell terminals. They share the same Firebase project from the same `.env` file, so a booking created in the Passenger window appears in the Driver window.
+
+```powershell
+# Terminal 1 — Passenger / Rider
+$env:PORT=8443; npm run dev
+
+# Terminal 2 — Driver
+$env:PORT=8444; npm run dev
+
+# Terminal 3 — Admin / Organizer
+$env:PORT=8445; npm run dev
+```
+
+Open the roles in separate browser profiles or incognito windows:
+
+| Role | Local URL | Select in the app |
+| --- | --- | --- |
+| Passenger / Rider | `http://localhost:8443` | **Passenger** |
+| Driver | `http://localhost:8444` | **Driver** |
+| Admin / Organizer | `http://localhost:8445` | **Admin** |
+
+All three local apps use the same real-time database. Keep the passenger and driver windows open during the ride so live status, route progress, and chat updates are visible.
 
 ## Project map
 
