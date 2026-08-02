@@ -73,7 +73,7 @@ export function resolveDrop(point: Point): { point: Point; name: string } {
 
   return {
     point,
-    name: `Pinned location · ${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`,
+    name: `${closest.name} area`,
   }
 }
 

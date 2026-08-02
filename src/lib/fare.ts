@@ -89,20 +89,21 @@ export function calculateFare(
   const farePerSeat =
     config.baseFarePerSeat +
     chargeableExtraKm * config.additionalFarePerKmPerSeat
+  const billableSeats = Math.min(6, Math.max(4, input.passengers))
 
   const eligible = config.discountsEnabled
     ? Math.min(
         input.discountedSeats,
         config.maxDiscountedSeats,
-        config.seatCapacity,
+        billableSeats,
       )
     : 0
-  const regularSeats = config.seatCapacity - eligible
+  const regularSeats = billableSeats - eligible
   const discountedSeatFare = Math.round(
     farePerSeat * (1 - config.discountPercent / 100),
   )
 
-  const fullVehicleFare = farePerSeat * config.seatCapacity
+  const fullVehicleFare = farePerSeat * billableSeats
   const vehicleFare = regularSeats * farePerSeat + eligible * discountedSeatFare
   const discount = vehicleFare - fullVehicleFare // negative or zero
 
@@ -152,7 +153,7 @@ export function calculateFare(
     },
     {
       label: "Fare per seat",
-      detail: `${formatPeso(farePerSeat)} × ${config.seatCapacity} billable seats`,
+      detail: `${formatPeso(farePerSeat)} × ${billableSeats} billable seats`,
       amount: fullVehicleFare,
     },
   ]
@@ -174,7 +175,7 @@ export function calculateFare(
   if (discount < 0) {
     lines.push({
       label: "Verified passenger discount",
-      detail: `${eligible} of ${config.seatCapacity} seats at ${config.discountPercent}% off`,
+      detail: `${eligible} of ${billableSeats} seats at ${config.discountPercent}% off`,
       amount: discount,
       tone: "credit",
     })
@@ -207,6 +208,7 @@ export function calculateFare(
   return {
     config,
     input,
+    billableSeats,
     chargeableExtraKm,
     farePerSeat,
     vehicleFare: fullVehicleFare + discount,

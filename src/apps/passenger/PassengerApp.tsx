@@ -1070,10 +1070,10 @@ function BookingScreen(p: BookingProps) {
           <div>
             <SectionLabel>Payment method</SectionLabel>
             <div className="mt-2 rounded-xl border border-ink bg-ink p-3 text-white">
-              <p className="font-display text-[13px] font-bold">BCH escrow</p>
+              <p className="font-display text-[13px] font-bold">Payment for your ride</p>
               <p className="mt-0.5 text-[10px] text-white/55">
-                Funded from your BCH address after an assigned driver accepts
-                the booking.
+                Your fare is securely set aside only after a driver accepts
+                your request.
               </p>
             </div>
           </div>
@@ -1102,7 +1102,7 @@ function BookingScreen(p: BookingProps) {
           )}
 
           <Button full onClick={p.onConfirm} disabled={insufficient}>
-            Request BCH escrow · {formatPeso(p.breakdown.total)}
+            Request ride · {formatPeso(p.breakdown.total)}
           </Button>
         </div>
       </div>

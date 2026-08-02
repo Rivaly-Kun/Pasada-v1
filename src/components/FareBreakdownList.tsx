@@ -57,7 +57,9 @@ export default function FareBreakdownList({
           <p className="font-mono text-[9px] tracking-[0.12em] text-ink-500 uppercase">
             Billable seats
           </p>
-          <p className="num mt-1 text-lg font-medium">{config.seatCapacity}</p>
+          <p className="num mt-1 text-lg font-medium">
+            {breakdown.billableSeats}
+          </p>
         </div>
         <div className="bg-ink-50 px-3 py-2.5">
           <p className="font-mono text-[9px] tracking-[0.12em] text-ink-500 uppercase">
@@ -73,9 +75,8 @@ export default function FareBreakdownList({
 export function BuyoutNotice() {
   return (
     <p className="mt-3 border-l-2 border-pasada-red bg-pasada-red/6 px-3 py-2.5 text-[11px] leading-relaxed text-ink-700">
-      This is an exclusive tricycle booking. The passenger reserves and pays for
-      the full six-seat capacity regardless of the number of passengers
-      boarding.
+      This is an exclusive tricycle booking. The fare includes four seats for
+      up to four passengers, then adds a seat for each fifth or sixth passenger.
     </p>
   )
 }

@@ -55,6 +55,8 @@ export interface FareLine {
 export interface FareBreakdown {
   config: FareConfig
   input: FareInput
+  /** Seats charged for this booking: four minimum, then each declared rider up to six. */
+  billableSeats: number
   chargeableExtraKm: number
   farePerSeat: number
   vehicleFare: number
