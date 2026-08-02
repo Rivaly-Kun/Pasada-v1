@@ -163,6 +163,10 @@ export interface LiveRide {
   platformFeeSats: number
   platformTaxSats: number
   driverPayoutSats: number
+  /** A driver must accept before this timestamp, otherwise the request expires. */
+  requestExpiresAt?: number
+  /** Passenger funding must finish before this timestamp after assignment. */
+  fundingExpiresAt?: number | null
   platformAccountId: string
   platformBchAddress: string | null
   appliedCoupon?: {
@@ -179,6 +183,8 @@ export interface LiveRide {
   discountPhp?: number
   /** Persisted pre-broadcast error, e.g. a missing local signing key. */
   fundingError?: string
+  /** Plain-language reason recorded when a booking or escrow deadline passes. */
+  timeoutReason?: string
   escrow?: {
     contractAddress: string
     network: "chipnet" | "mainnet"
@@ -194,6 +200,8 @@ export interface LiveRide {
     platformFeeSats: number
     releaseFeeSats: number
     fundingSats: number
+    /** Unix timestamp in seconds when the public timeout refund becomes valid. */
+    refundLocktime: number
     fundingTxid?: string
     settlementTxid?: string
     refundTxid?: string
@@ -211,6 +219,8 @@ export interface LiveRide {
   createdAt: number
   updatedAt: number
   acceptedAt?: number
+  /** When the driver verified the passenger PIN and the trip began. */
+  startedAt?: number
   settledAt?: number
   cancelledAt?: number
   onChainTxid?: string

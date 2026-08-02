@@ -51,6 +51,8 @@ import {
 import {
   cancelRide,
   createRide,
+  expireRideTimeouts,
+  fundRideEscrow,
   submitDriverRating,
   subscribeAccountBalance,
   subscribeRide,
@@ -295,6 +297,30 @@ export default function PassengerApp({
       setStatus(ride.status)
     })
   }, [rideId])
+
+  useEffect(() => {
+    if (
+      !liveRide ||
+      liveRide.demoMode ||
+      liveRide.status !== "funding" ||
+      liveRide.paymentStatus !== "funding" ||
+      !liveRide.escrow
+    )
+      return
+    void fundRideEscrow(account.uid, liveRide.id).catch((error) => {
+      setServiceError(
+        error instanceof Error ? error.message : "Your ride payment could not be completed.",
+      )
+    })
+  }, [account.uid, liveRide])
+
+  useEffect(() => {
+    const checkTimeouts = () =>
+      void expireRideTimeouts("passenger").catch(() => undefined)
+    checkTimeouts()
+    const timer = window.setInterval(checkTimeouts, 10_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const startRideRequest = async () => {
     setServiceError("")
@@ -1155,6 +1181,7 @@ function RideScreen({
   const escrowFunded =
     ride?.paymentStatus === "funded" || ride?.paymentStatus === "settled"
   const progress = ride?.progress ?? 0
+  const progressPercent = Math.round(progress * 100)
   const driverName = driver?.name ?? "Your driver"
   const settlementTxid = ride?.onChainTxid ?? ride?.escrow?.settlementTxid
   const fundingError =
@@ -1240,6 +1267,9 @@ function RideScreen({
             <p className="mt-1 text-[12px] text-ink-500">
               Broadcasting to approved drivers near {from}.
             </p>
+            <p className="mt-1 text-[10px] text-ink-400">
+              This request closes automatically if no driver accepts in time.
+            </p>
             <div className="mt-4 h-1 overflow-hidden rounded-full bg-ink-100">
               <span className="block h-full w-1/3 animate-pulse rounded-full bg-pasada-red" />
             </div>
@@ -1303,17 +1333,27 @@ function RideScreen({
             <h2 className="mt-3 font-display text-xl font-extrabold">
               On the way to {to}
             </h2>
-            <div className="mt-3 h-1 overflow-hidden rounded-full bg-ink-100">
+            <div
+              className="mt-3 h-1 overflow-hidden rounded-full bg-ink-100"
+              role="progressbar"
+              aria-label="Estimated trip progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progressPercent}
+            >
               <span
-                className="block h-full rounded-full bg-pasada-blue transition-all duration-300"
-                style={{ width: `${Math.round(progress * 100)}%` }}
+                className="block h-full rounded-full bg-pasada-blue transition-all duration-1000 ease-out"
+                style={{ width: `${progressPercent}%` }}
               />
             </div>
+            <p className="mt-2 text-[11px] text-ink-400">
+              Estimated trip progress · {progressPercent}%
+            </p>
             {driver && <DriverCard driver={driver} />}
             <div className="mt-4">
               <Button full disabled>
                 {progress < 0.98
-                  ? `Arriving · ${Math.round(progress * 100)}%`
+                  ? `Arriving · ${progressPercent}%`
                   : "Confirm arrival & release payment"}
               </Button>
             </div>

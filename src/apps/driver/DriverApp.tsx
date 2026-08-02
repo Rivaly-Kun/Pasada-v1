@@ -29,6 +29,7 @@ import {
   cancelFundingRideByDriver,
   completeRide,
   dispatchOldestWaitingRide,
+  expireRideTimeouts,
   heartbeatDriver,
   rejectRide,
   retryEscrowFunding,
@@ -39,6 +40,7 @@ import {
   subscribeRide,
   subscribeRideHistory,
   updateDriverLocation,
+  updateRideProgress,
   verifyRidePin,
 } from "../../lib/ride-service"
 import type {
@@ -299,10 +301,46 @@ export default function DriverApp({
   }, [online, account.uid, liveRide?.demoMode])
 
   useEffect(() => {
+    if (
+      !rideId ||
+      stage !== "in_transit" ||
+      !liveRide ||
+      liveRide.demoMode
+    )
+      return
+
+    // GPS updates remain the primary source of truth. This gentle estimate
+    // keeps the passenger's route indicator moving between location updates
+    // (or when a device reports locations infrequently).
+    const startedAt = liveRide.startedAt ?? liveRide.updatedAt
+    const estimatedDurationMs = Math.max(60_000, liveRide.durationMin * 60_000)
+    const syncEstimatedProgress = () => {
+      const estimatedProgress = Math.min(
+        0.95,
+        Math.max(0, (Date.now() - startedAt) / estimatedDurationMs),
+      )
+      if (estimatedProgress <= liveRide.progress + 0.01) return
+      void updateRideProgress(account.uid, rideId, estimatedProgress).catch(
+        () => undefined,
+      )
+    }
+
+    syncEstimatedProgress()
+    const timer = window.setInterval(syncEstimatedProgress, 5_000)
+    return () => window.clearInterval(timer)
+  }, [
+    account.uid,
+    liveRide,
+    rideId,
+    stage,
+  ])
+
+  useEffect(() => {
     if (!online || stage !== "idle") return
     const db = getScopedFirebase("driver").database
     const pollDispatch = () => {
-      void heartbeatDriver(account.uid)
+      void expireRideTimeouts("driver")
+        .then(() => heartbeatDriver(account.uid))
         .then(() => dispatchOldestWaitingRide(db))
         .catch((error) =>
           setServiceError(

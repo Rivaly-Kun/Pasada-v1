@@ -18,6 +18,8 @@ import PasadaEscrowArtifact from "../contracts/PasadaEscrow.json"
 
 export const ESCROW_RELEASE_FEE_SATS = 1_000
 export const ESCROW_FUNDING_FEE_RESERVE_SATS = 1_000
+/** A funded ride can be publicly refunded to its passenger after 30 minutes. */
+export const ESCROW_REFUND_TIMEOUT_SECONDS = 30 * 60
 
 export class EscrowBroadcastPendingError extends Error {}
 
@@ -44,6 +46,8 @@ export type EscrowDescriptor = {
   platformFeeSats: number
   releaseFeeSats: number
   fundingSats: number
+  /** Unix timestamp in seconds when the timeout-refund contract branch unlocks. */
+  refundLocktime: number
 }
 
 export type EscrowCouponRedemption = {
@@ -62,6 +66,7 @@ type EscrowParticipants = {
   platformAddress: string
   driverPayoutSats: number
   platformFeeSats: number
+  refundLocktime?: number
 }
 
 function within<T>(
@@ -162,6 +167,7 @@ function contractFor(
       BigInt(descriptor.driverPayoutSats),
       BigInt(descriptor.platformFeeSats),
       BigInt(descriptor.releaseFeeSats),
+      BigInt(descriptor.refundLocktime),
     ],
     { provider, contractType: "p2sh32" },
   )
@@ -287,6 +293,9 @@ export function prepareEscrowDescriptor(
       Math.trunc(participants.driverPayoutSats) +
       Math.trunc(participants.platformFeeSats) +
       ESCROW_RELEASE_FEE_SATS,
+    refundLocktime:
+      participants.refundLocktime ??
+      Math.floor(Date.now() / 1_000) + ESCROW_REFUND_TIMEOUT_SECONDS,
   }
   const { contract } = contractFor(descriptor)
   return { ...descriptor, contractAddress: contract.address }
@@ -501,4 +510,53 @@ export async function refundEscrow(
   throw lastError instanceof Error
     ? lastError
     : new Error("Unable to refund the BCH escrow.")
+}
+
+/**
+ * Broadcasts the contract's no-signature recovery path once a funded ride has
+ * passed its deadline. The covenant fixes the output to the passenger address.
+ */
+export async function refundExpiredEscrow(
+  descriptor: EscrowDescriptor,
+): Promise<string> {
+  if (Math.floor(Date.now() / 1_000) < descriptor.refundLocktime) {
+    throw new Error("This ride's refund deadline has not been reached yet.")
+  }
+  const refundSats = descriptor.fundingSats - descriptor.releaseFeeSats
+  let lastError: unknown
+  for (const hostname of ESCROW_ELECTRUM_HOSTS[descriptor.network]) {
+    const provider = providerFor(descriptor.network, hostname)
+    const { contract } = contractFor(descriptor, provider)
+    try {
+      const utxos = await within(
+        contract.getUtxos(),
+        15_000,
+        "Timed out while reading the BCH escrow contract.",
+      )
+      if (
+        utxos.length !== 1 ||
+        utxos[0].satoshis !== BigInt(descriptor.fundingSats)
+      ) {
+        throw new Error(
+          "The ride escrow UTXO is unavailable or no longer matches its funded amount.",
+        )
+      }
+      const transaction = new TransactionBuilder({
+        provider,
+        maximumFeeSatoshis: BigInt(descriptor.releaseFeeSats),
+      })
+        .addInput(utxos[0], contract.unlock.timeoutRefund())
+        .addOutput({
+          to: descriptor.passengerAddress,
+          amount: BigInt(refundSats),
+        })
+        .setLocktime(descriptor.refundLocktime)
+      return await buildAndBroadcast(transaction, provider)
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Unable to refund the expired BCH escrow.")
 }

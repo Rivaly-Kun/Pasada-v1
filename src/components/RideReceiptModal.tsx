@@ -100,6 +100,9 @@ export default function RideReceiptModal({
               }
             />
           )}
+          {!succeeded && ride.timeoutReason && (
+            <ReceiptRow label="Cancellation reason" value={ride.timeoutReason} />
+          )}
           {ride.appliedCoupon && (
             <ReceiptRow
               label="PRC coupon"

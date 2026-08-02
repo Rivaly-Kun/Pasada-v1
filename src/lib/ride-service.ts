@@ -19,7 +19,9 @@ import {
   getEscrowFundingTxid,
   prepareEscrowDescriptor,
   refundEscrow,
+  refundExpiredEscrow,
   settleEscrow,
+  ESCROW_REFUND_TIMEOUT_SECONDS,
 } from "./bch-escrow"
 import {
   publicKeyForLocalBchWallet,
@@ -50,6 +52,10 @@ type DriverSeed = {
 
 const DRIVER_HEARTBEAT_TIMEOUT_MS = 30_000
 const DRIVER_REOFFER_COOLDOWN_MS = 30_000
+/** The booking disappears if no driver accepts it within one minute. */
+export const BOOKING_REQUEST_TIMEOUT_MS = 60_000
+/** A driver assignment is released if passenger funding has not begun in time. */
+export const FUNDING_TIMEOUT_MS = 2 * 60_000
 function isFirebaseMaxRetry(error: unknown): boolean {
   return error instanceof Error && error.message.toLowerCase() === "maxretry"
 }
@@ -272,6 +278,194 @@ export async function heartbeatDriver(driverId: string): Promise<void> {
   )
 }
 
+/**
+ * Reconciles booking deadlines whenever either app is online. A production
+ * deployment should additionally invoke this from a scheduled server job.
+ */
+export async function expireRideTimeouts(role: AppRole): Promise<void> {
+  const db = roleDatabase(role)
+  const snapshot = await get(ref(db, "rides"))
+  if (!snapshot.exists()) return
+  const now = Date.now()
+  const rides = Object.values(snapshot.val() as Record<string, LiveRide>).map(
+    normalizeRide,
+  )
+
+  for (const ride of rides) {
+    if (
+      ride.status === "searching" &&
+      ride.requestExpiresAt &&
+      now >= ride.requestExpiresAt
+    ) {
+      await expireUnfundedRide(
+        db,
+        ride,
+        "No driver accepted this booking in time.",
+      )
+      continue
+    }
+
+    if (
+      ride.status === "funding" &&
+      ride.fundingExpiresAt &&
+      now >= ride.fundingExpiresAt
+    ) {
+      const fundingTxid = ride.escrow
+        ? await getEscrowFundingTxid(ride.escrow).catch(() => null)
+        : null
+      if (fundingTxid) {
+        await markRecoveredFunding(db, ride, fundingTxid)
+      } else {
+        await expireUnfundedRide(
+          db,
+          ride,
+          "Payment was not completed before the booking deadline.",
+        )
+      }
+      continue
+    }
+
+    if (
+      ride.escrow?.fundingTxid &&
+      ride.escrow.refundLocktime &&
+      now >= ride.escrow.refundLocktime * 1_000 &&
+      ["accepted", "arriving", "awaiting_pin", "in_transit", "completing"].includes(
+        ride.status,
+      )
+    ) {
+      await refundTimedOutRide(db, ride)
+    }
+  }
+}
+
+async function expireUnfundedRide(
+  db: Database,
+  ride: LiveRide,
+  timeoutReason: string,
+) {
+  const expiredAt = Date.now()
+  const expired = await runTransaction(
+    ref(db, `rides/${ride.id}`),
+    (current: LiveRide | null) => {
+      if (
+        !current ||
+        !["searching", "funding"].includes(current.status) ||
+        current.escrow?.fundingTxid
+      )
+        return
+      return {
+        ...current,
+        status: "cancelled",
+        paymentStatus: "refunded",
+        timeoutReason,
+        cancelledAt: expiredAt,
+        updatedAt: expiredAt,
+      }
+    },
+  )
+  if (!expired.committed) return
+  const cancelledRide = normalizeRide(expired.snapshot.val() as LiveRide)
+  await releaseExpiredRide(db, cancelledRide, expiredAt)
+}
+
+async function markRecoveredFunding(
+  db: Database,
+  ride: LiveRide,
+  fundingTxid: string,
+) {
+  const fundedAt = Date.now()
+  const funded = await runTransaction(
+    ref(db, `rides/${ride.id}`),
+    (current: LiveRide | null) => {
+      if (
+        !current ||
+        current.status !== "funding" ||
+        current.escrow?.fundingTxid
+      )
+        return
+      return {
+        ...current,
+        status: "accepted",
+        paymentStatus: "funded",
+        acceptedAt: fundedAt,
+        fundingExpiresAt: null,
+        escrow: { ...current.escrow!, fundingTxid, error: null },
+        updatedAt: fundedAt,
+      }
+    },
+  )
+  if (!funded.committed) return
+
+  const recoveredRide = normalizeRide(funded.snapshot.val() as LiveRide)
+  const statusWrites: Record<string, unknown> = {
+    [`passengerRides/${recoveredRide.passengerId}/${recoveredRide.id}/status`]:
+      "accepted",
+  }
+  if (recoveredRide.driverId) {
+    statusWrites[
+      `driverRequests/${recoveredRide.driverId}/${recoveredRide.id}/status`
+    ] = "accepted"
+  }
+  await update(ref(db), statusWrites)
+}
+
+async function refundTimedOutRide(db: Database, ride: LiveRide) {
+  let refundTxid: string
+  try {
+    refundTxid = await refundExpiredEscrow(ride.escrow!)
+  } catch {
+    // Another app may have already settled or refunded the escrow.
+    return
+  }
+  const refundedAt = Date.now()
+  const refunded = await runTransaction(
+    ref(db, `rides/${ride.id}`),
+    (current: LiveRide | null) => {
+      if (
+        !current ||
+        !current.escrow?.fundingTxid ||
+        !["accepted", "arriving", "awaiting_pin", "in_transit", "completing"].includes(
+          current.status,
+        )
+      )
+        return
+      return {
+        ...current,
+        status: "cancelled",
+        paymentStatus: "refunded",
+        timeoutReason: "The ride timed out and your fare was refunded.",
+        cancelledAt: refundedAt,
+        escrow: { ...current.escrow, refundTxid },
+        updatedAt: refundedAt,
+      }
+    },
+  )
+  if (!refunded.committed) return
+  await releaseExpiredRide(
+    db,
+    normalizeRide(refunded.snapshot.val() as LiveRide),
+    refundedAt,
+  )
+}
+
+async function releaseExpiredRide(
+  db: Database,
+  ride: LiveRide,
+  at: number,
+) {
+  const writes: Record<string, unknown> = {
+    [`passengerRides/${ride.passengerId}/${ride.id}/status`]: "cancelled",
+  }
+  if (ride.driverId) {
+    writes[`drivers/${ride.driverId}/available`] = true
+    writes[`drivers/${ride.driverId}/assignedRideId`] = null
+    writes[`drivers/${ride.driverId}/updatedAt`] = at
+    writes[`driverRequests/${ride.driverId}/${ride.id}/status`] = "cancelled"
+  }
+  await update(ref(db), writes)
+  await archiveRideMessages("passenger", ride)
+}
+
 export async function createRide(input: RideInput): Promise<string> {
   const db = roleDatabase("passenger")
   await ensurePlatformState()
@@ -383,6 +577,7 @@ export async function createRide(input: RideInput): Promise<string> {
     platformFeeSats,
     platformTaxSats,
     driverPayoutSats,
+    requestExpiresAt: now + BOOKING_REQUEST_TIMEOUT_MS,
     platformAccountId: PLATFORM_ACCOUNT_ID,
     platformBchAddress: platformAccount?.bchAddress ?? null,
     ...(input.appliedCoupon
@@ -567,6 +762,7 @@ export async function acceptRide(
           Math.round(distanceKm(claimedDriver.location, ride.pickup) * 10) / 10,
         status: "funding",
         paymentStatus: "funding",
+        fundingExpiresAt: now + FUNDING_TIMEOUT_MS,
         updatedAt: now,
       }
     }),
@@ -660,6 +856,11 @@ export async function acceptRide(
       platformAddress,
       driverPayoutSats: ride.driverPayoutSats,
       platformFeeSats: ride.platformFeeSats,
+      // The descriptor is created before funding. Add the funding window so a
+      // funded ride still has a full 30-minute recovery window afterwards.
+      refundLocktime: Math.floor(
+        (now + FUNDING_TIMEOUT_MS) / 1_000,
+      ) + ESCROW_REFUND_TIMEOUT_SECONDS,
     })
 
     await update(ref(db, `rides/${rideId}`), {
@@ -1192,6 +1393,7 @@ export async function verifyRidePin(
   pin: string,
 ): Promise<boolean> {
   const db = roleDatabase("driver")
+  const startedAt = Date.now()
   const result = await runTransaction(
     ref(db, `rides/${rideId}`),
     (ride: LiveRide | null) => {
@@ -1208,7 +1410,8 @@ export async function verifyRidePin(
         ...ride,
         status: "in_transit",
         progress: 0,
-        updatedAt: Date.now(),
+        startedAt,
+        updatedAt: startedAt,
       }
     },
   )
@@ -1221,13 +1424,16 @@ export async function updateRideProgress(
   progress: number,
 ): Promise<void> {
   const db = roleDatabase("driver")
-  const rideSnapshot = await get(ref(db, `rides/${rideId}`))
-  const ride = rideSnapshot.val() as LiveRide | null
-  if (!ride || ride.driverId !== driverId || ride.status !== "in_transit")
-    return
-  await update(ref(db, `rides/${rideId}`), {
-    progress: Math.min(1, Math.max(0, progress)),
-    updatedAt: Date.now(),
+  const nextProgress = Math.min(1, Math.max(0, progress))
+  await runTransaction(ref(db, `rides/${rideId}`), (ride: LiveRide | null) => {
+    if (!ride || ride.driverId !== driverId || ride.status !== "in_transit")
+      return
+    if (nextProgress <= ride.progress) return
+    return {
+      ...ride,
+      progress: nextProgress,
+      updatedAt: Date.now(),
+    }
   })
 }
 

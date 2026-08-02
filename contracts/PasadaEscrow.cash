@@ -12,7 +12,8 @@ contract PasadaEscrow(
     bytes20 platformPkh,
     int driverPayout,
     int platformFee,
-    int releaseFee
+    int releaseFee,
+    int refundLocktime
 ) {
     function settle(sig driverSignature) {
         require(checkSig(driverSignature, driver));
@@ -27,6 +28,16 @@ contract PasadaEscrow(
 
     function refund(sig passengerSignature) {
         require(checkSig(passengerSignature, passenger));
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 1);
+        require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(passengerPkh));
+        require(tx.outputs[0].value == tx.inputs[this.activeInputIndex].value - releaseFee);
+    }
+
+    // After the ride deadline, anyone may return the fixed escrow amount to
+    // the passenger. No private key is needed to trigger this safe recovery.
+    function timeoutRefund() {
+        require(tx.time >= refundLocktime);
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 1);
         require(tx.outputs[0].lockingBytecode == new LockingBytecodeP2PKH(passengerPkh));
