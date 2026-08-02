@@ -42,7 +42,8 @@ export type PasadaRegistration = {
   bchAddress: string
   walletMode: WalletMode
   bchPublicKey: string
-  identityVerification: ApprovedIdentityVerification
+  /** Drivers must complete ID verification; passengers do not upload ID. */
+  identityVerification?: ApprovedIdentityVerification
   /** Optional code supplied by a new passenger. */
   referredByCode?: string
   plate?: string
@@ -146,23 +147,25 @@ export async function loginPasada(
 }
 
 export async function registerPasada(role: AppRole, input: PasadaRegistration) {
-  if (
-    !input.identityVerification?.approved ||
-    input.identityVerification.role !== role
-  ) {
-    throw new Error("Complete the AI identity verification before registering.")
-  }
-  if (Date.now() - input.identityVerification.approvedAt > 15 * 60 * 1000) {
-    throw new Error(
-      "Your identity check expired. Verify the ID images again before registering.",
-    )
-  }
-  if (
-    input.identityVerification.verifiedDisplayName !== input.displayName.trim()
-  ) {
-    throw new Error(
-      "Your display name changed. Verify the ID images again before registering.",
-    )
+  if (role === "driver") {
+    if (
+      !input.identityVerification?.approved ||
+      input.identityVerification.role !== role
+    ) {
+      throw new Error("Complete the AI identity verification before registering.")
+    }
+    if (Date.now() - input.identityVerification.approvedAt > 15 * 60 * 1000) {
+      throw new Error(
+        "Your identity check expired. Verify the ID images again before registering.",
+      )
+    }
+    if (
+      input.identityVerification.verifiedDisplayName !== input.displayName.trim()
+    ) {
+      throw new Error(
+        "Your display name changed. Verify the ID images again before registering.",
+      )
+    }
   }
   const validated = normalizeAndValidateBchAddress(input.bchAddress)
   if (!validated.valid) throw new Error(validated.error)
@@ -240,11 +243,13 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       get(ref(scoped.database, `${roleCollection}/${uid}`)),
       get(ref(scoped.database, `roleAccounts/${role}/${uid}/balance`)),
     ])
-    storedIdentityVerification = await storeApprovedIdentityDocuments(
-      role,
-      uid,
-      input.identityVerification,
-    )
+    if (role === "driver" && input.identityVerification) {
+      storedIdentityVerification = await storeApprovedIdentityDocuments(
+        role,
+        uid,
+        input.identityVerification,
+      )
+    }
     await updateProfile(credential.user, {
       displayName: input.displayName.trim(),
     })
@@ -258,8 +263,10 @@ export async function registerPasada(role: AppRole, input: PasadaRegistration) {
       chipnetTokenAddress,
       walletMode: input.walletMode,
       bchPublicKey,
-      identityVerification: storedIdentityVerification,
       accountStatus: "active",
+      ...(storedIdentityVerification
+        ? { identityVerification: storedIdentityVerification }
+        : {}),
       ...(role === "passenger"
         ? {
             referralCode,

@@ -141,9 +141,10 @@ function RoleLoginPanel({
     displayName.trim().length > 1 &&
     email.trim().length > 3 &&
     password.length >= 6 &&
-    Boolean(identityVerification) &&
     (role !== "driver" ||
-      (plate.trim().length > 2 && vehicleBody.trim().length > 2))
+      (Boolean(identityVerification) &&
+        plate.trim().length > 2 &&
+        vehicleBody.trim().length > 2))
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -154,7 +155,7 @@ function RoleLoginPanel({
         await loginPasada(role, email, password)
         return
       }
-      if (!identityVerification) {
+      if (role === "driver" && !identityVerification) {
         throw new Error(
           "Verify your required ID images before creating an account.",
         )
@@ -318,7 +319,7 @@ function RoleLoginPanel({
             </div>
           )}
 
-          {mode === "register" && (
+          {mode === "register" && role === "driver" && (
             <IdentityVerificationPanel
               role={role}
               displayName={displayName}

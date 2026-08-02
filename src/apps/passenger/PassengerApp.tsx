@@ -57,7 +57,6 @@ import {
   subscribeRideHistory,
 } from "../../lib/ride-service"
 import type {
-  DiscountClass,
   CashTokenConfig,
   FareConfig,
   LiveDriver,
@@ -149,16 +148,13 @@ export default function PassengerApp({
   )
   const [durationMin, setDurationMin] = useState(8)
   const [passengers, setPassengers] = useState(2)
-  const [classes, setClasses] = useState<DiscountClass[]>([])
-  const [specialTrip, setSpecialTrip] = useState(false)
   const [nightTrip, setNightTrip] = useState(() => isNightHour(fareConfig))
 
   /** Config captured at confirmation — later admin edits must not touch it. */
   const [locked, setLocked] = useState<FareConfig | null>(null)
 
   const activeConfig = locked ?? fareConfig
-  const discountedSeats =
-    classes.length > 0 ? Math.min(passengers, activeConfig.seatCapacity) : 0
+  const discountedSeats = 0
 
   const breakdown = useMemo(
     () =>
@@ -166,7 +162,7 @@ export default function PassengerApp({
         tripDistanceKm: distanceKm,
         passengers,
         discountedSeats,
-        specialTrip,
+        specialTrip: false,
         nightTrip,
         couponDiscountPhp:
           usePrcCoupon && prcConfig ? prcConfig.couponValuePhp : 0,
@@ -176,7 +172,6 @@ export default function PassengerApp({
       distanceKm,
       passengers,
       discountedSeats,
-      specialTrip,
       nightTrip,
       usePrcCoupon,
       prcConfig,
@@ -339,7 +334,7 @@ export default function PassengerApp({
         durationMin,
         passengers,
         discountedSeats,
-        specialTrip,
+        specialTrip: false,
         nightTrip,
         total: breakdown.total,
         transportationFare: breakdown.transportationFare,
@@ -486,10 +481,6 @@ export default function PassengerApp({
           }}
           passengers={passengers}
           setPassengers={setPassengers}
-          classes={classes}
-          setClasses={setClasses}
-          specialTrip={specialTrip}
-          setSpecialTrip={setSpecialTrip}
           nightTrip={nightTrip}
           setNightTrip={setNightTrip}
           breakdown={breakdown}
@@ -792,10 +783,6 @@ type BookingProps = {
   onRoute: (distanceKm: number, durationMin: number) => void
   passengers: number
   setPassengers: (v: number) => void
-  classes: DiscountClass[]
-  setClasses: (v: DiscountClass[]) => void
-  specialTrip: boolean
-  setSpecialTrip: (v: boolean) => void
   nightTrip: boolean
   setNightTrip: (v: boolean) => void
   breakdown: ReturnType<typeof calculateFare>
@@ -1023,48 +1010,7 @@ function BookingScreen(p: BookingProps) {
             </div>
           </div>
 
-          {/* Discounts */}
-          <div>
-            <SectionLabel>Verified discount classification</SectionLabel>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {(["senior", "pwd", "student"] as DiscountClass[]).map((c) => {
-                const on = p.classes.includes(c)
-                return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() =>
-                      p.setClasses(
-                        on
-                          ? p.classes.filter((x) => x !== c)
-                          : [...p.classes, c],
-                      )
-                    }
-                    className={`rounded-full border px-3.5 py-1.5 text-[12px] transition-colors ${
-                      on
-                        ? "border-pasada-blue bg-pasada-blue text-white"
-                        : "border-ink-100 text-ink-500 hover:border-ink-300"
-                    }`}
-                  >
-                    {c === "pwd" ? "PWD" : c[0].toUpperCase() + c.slice(1)}
-                  </button>
-                )
-              })}
-            </div>
-            <p className="mt-1.5 text-[11px] text-ink-300">
-              Applies only to the {p.passengers} declared seat
-              {p.passengers > 1 ? "s" : ""}. The remaining seats stay at the
-              regular rate.
-            </p>
-          </div>
-
           <div className="rounded-xl bg-ink-50 px-4 py-1">
-            <Toggle
-              on={p.specialTrip}
-              onChange={p.setSpecialTrip}
-              label="Special trip (off usual route / private subdivision)"
-            />
-            <div className="h-px bg-ink-100" />
             <Toggle
               on={p.nightTrip}
               onChange={p.setNightTrip}

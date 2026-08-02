@@ -60,7 +60,7 @@ export default function IdentityVerificationPanel({
     () =>
       role === "passenger"
         ? [passengerDocument]
-        : ["national_id", "drivers_license"],
+        : ["drivers_license"],
     [role, passengerDocument],
   )
   const requiredSlots = useMemo(

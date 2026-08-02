@@ -370,13 +370,13 @@ export async function verifyIdentityDocuments({
   const requiredTypes: IdentityDocumentType[] =
     role === "passenger"
       ? [uploads[0]?.documentType].filter(Boolean) as IdentityDocumentType[]
-      : ["national_id", "drivers_license"]
+      : ["drivers_license"]
   if (!displayName.trim() || displayName.trim().length < 2) {
     console.warn("⚠️ [AI Identity Check] Display name missing or invalid")
     throw new Error("Enter your display name before verifying your ID.")
   }
   if (
-    requiredTypes.length !== (role === "passenger" ? 1 : 2) ||
+    requiredTypes.length !== 1 ||
     requiredTypes.some(
       (type) => !uploads.some((upload) => upload.documentType === type && upload.side === "front") || !uploads.some((upload) => upload.documentType === type && upload.side === "back"),
     )
@@ -405,7 +405,7 @@ export async function verifyIdentityDocuments({
       message:
         role === "passenger"
           ? "These uploads do not look like the selected ID. For your security, select both sides again using clear photos of the original ID."
-          : "These uploads do not look like the required ID documents. For your security, select all four sides again using clear photos of the original IDs.",
+          : "These uploads do not look like the required driver's license. For your security, select both sides again using clear photos of the original ID.",
       assessments,
     }
   }
