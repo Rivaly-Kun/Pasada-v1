@@ -56,6 +56,12 @@ const NAV = [
   { id: "settings", label: "Settings", icon: Icons.settings },
 ]
 
+function formatPickupLocation(location: string) {
+  return location.startsWith("Pinned location") || !location.trim()
+    ? "Pickup location"
+    : location
+}
+
 type Stage = "idle" | "request" | "funding" | "to_pickup" | "verify" | "in_transit" | "settled"
 
 export default function DriverApp({
@@ -198,6 +204,7 @@ export default function DriverApp({
   )
   const { driverPayout, platformCommission } = settlementOutputs(breakdown)
   const progress = liveRide?.progress ?? 0
+  const pickupLocation = formatPickupLocation(request.from)
 
   const toggleOnline = async () => {
     if (stage !== "idle") return
@@ -460,7 +467,10 @@ export default function DriverApp({
                 <div className="flex items-start gap-2.5">
                   <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-pasada-red" />
                   <div>
-                    <p className="text-[13px] font-medium">{request.from}</p>
+                    <p className="text-[10px] font-bold tracking-[0.12em] text-ink-400 uppercase">
+                      Pickup location
+                    </p>
+                    <p className="text-[13px] font-medium">{pickupLocation}</p>
                     <p className="num text-[11px] text-ink-300">
                       {request.distanceToPickupKm} km away · ~
                       {Math.max(1, Math.ceil(request.distanceToPickupKm * 3))}{" "}
@@ -727,8 +737,8 @@ export default function DriverApp({
 
           {stage === "to_pickup" && (
             <ActionSheet
-              title={`Pick up ${request.passenger.split(" ")[0]}`}
-              sub={`${request.distanceToPickupKm} km to ${request.from}`}
+              title="Pickup location"
+              sub={`${request.distanceToPickupKm} km to ${pickupLocation}`}
               payout={driverPayout}
             >
               <Button
